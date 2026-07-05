@@ -14,6 +14,11 @@ import com.fridgefinish.app.domain.FoodCategory
 import com.fridgefinish.app.domain.FoodLocation
 import com.fridgefinish.app.domain.FreshnessCalculator
 import com.fridgefinish.app.domain.FreshnessStatus
+import com.fridgefinish.app.subscription.BillingGateway
+import com.fridgefinish.app.subscription.BillingResult
+import com.fridgefinish.app.subscription.FridgeFinishSubscriptionState
+import com.fridgefinish.app.subscription.PlaceholderBillingGateway
+import com.fridgefinish.app.subscription.toUserMessage
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -27,7 +32,8 @@ data class FridgeFinishUiState(
     val foods: List<FoodItemEntity> = emptyList(),
     val restock: List<RestockItemEntity> = emptyList(),
     val recipes: List<RecipeEntity> = emptyList(),
-    val recipeIngredients: List<RecipeIngredientEntity> = emptyList()
+    val recipeIngredients: List<RecipeIngredientEntity> = emptyList(),
+    val subscription: FridgeFinishSubscriptionState = FridgeFinishSubscriptionState()
 ) {
     val activeFoods: List<FoodItemEntity> =
         foods.filterNot { it.isFinished }.sortedBy {
@@ -47,8 +53,10 @@ data class FridgeFinishUiState(
 class FridgeFinishViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = (application as FridgeFinishApplication).repository
     private val productLookup = ProductLookupRepository()
+    private val billingGateway: BillingGateway = PlaceholderBillingGateway()
     private val _barcodeLookup = MutableStateFlow<BarcodeLookupState>(BarcodeLookupState.Idle)
     val barcodeLookup = _barcodeLookup.asStateFlow()
+    private val billingMessage = MutableStateFlow<String?>(null)
 
     init {
         viewModelScope.launch { repository.seedRecipeDatabaseIfNeeded() }
@@ -56,13 +64,20 @@ class FridgeFinishViewModel(application: Application) : AndroidViewModel(applica
 
     val uiState: StateFlow<FridgeFinishUiState> = combine(
         combine(repository.foods, repository.restockItems) { foods, restock -> foods to restock },
-        combine(repository.recipes, repository.recipeIngredients) { recipes, ingredients -> recipes to ingredients }
-    ) { foodData, recipeData ->
+        combine(repository.recipes, repository.recipeIngredients) { recipes, ingredients -> recipes to ingredients },
+        combine(billingGateway.subscriptionTier, billingMessage) { tier, message -> tier to message }
+    ) { foodData, recipeData, billingData ->
+        val activeItemCount = foodData.first.count { !it.isFinished }
         FridgeFinishUiState(
             foods = foodData.first,
             restock = foodData.second,
             recipes = recipeData.first,
-            recipeIngredients = recipeData.second
+            recipeIngredients = recipeData.second,
+            subscription = FridgeFinishSubscriptionState(
+                tier = billingData.first,
+                activeItemCount = activeItemCount,
+                billingMessage = billingData.second
+            )
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FridgeFinishUiState())
 
@@ -105,6 +120,18 @@ class FridgeFinishViewModel(application: Application) : AndroidViewModel(applica
 
     fun clearBarcodeLookup() {
         _barcodeLookup.value = BarcodeLookupState.Idle
+    }
+
+    fun startPlusPurchase() {
+        viewModelScope.launch {
+            billingMessage.value = billingGateway.startPlusPurchase().toUserMessage()
+        }
+    }
+
+    fun restorePlusPurchases() {
+        viewModelScope.launch {
+            billingMessage.value = billingGateway.restorePurchases().toUserMessage()
+        }
     }
 
     fun presetFood(category: FoodCategory, location: FoodLocation = FoodLocation.FRIDGE): FoodItemEntity {

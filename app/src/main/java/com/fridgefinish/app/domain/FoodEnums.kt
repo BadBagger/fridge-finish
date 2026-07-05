@@ -19,9 +19,12 @@ enum class FoodCategory(val label: String) {
 }
 
 enum class FoodLocation(val label: String) {
-    FRIDGE("Fridge"),
+    FRIDGE("Main Fridge"),
     FREEZER("Freezer"),
-    PANTRY("Pantry")
+    PANTRY("Pantry"),
+    GARAGE_FREEZER("Garage Freezer"),
+    MINI_FRIDGE("Mini Fridge"),
+    OTHER("Other")
 }
 
 enum class FreshnessStatus(val label: String) {

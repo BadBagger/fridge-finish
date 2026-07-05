@@ -31,9 +31,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -46,6 +48,7 @@ import androidx.compose.material.icons.filled.Kitchen
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -102,6 +105,11 @@ import com.fridgefinish.app.domain.FoodLocation
 import com.fridgefinish.app.domain.FreshnessCalculator
 import com.fridgefinish.app.domain.FreshnessStatus
 import com.fridgefinish.app.domain.DateTextParser
+import com.fridgefinish.app.subscription.FeatureGateResult
+import com.fridgefinish.app.subscription.FridgeFinishFeatureGate
+import com.fridgefinish.app.subscription.FridgeFinishPlans
+import com.fridgefinish.app.subscription.FridgeFinishSubscriptionState
+import com.fridgefinish.app.subscription.PlusFeature
 import com.fridgefinish.app.ui.BarcodeLookupState
 import com.fridgefinish.app.ui.BarcodeScannerScreen
 import com.fridgefinish.app.ui.FridgeFinishUiState
@@ -124,7 +132,29 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen(val label: String) { TODAY("Today"), FRIDGE("Storage"), FREEZER("Storage"), PANTRY("Storage"), RECIPES("Recipes"), RESTOCK("Shop"), SETTINGS("Info"), SCAN("Scan") }
+private enum class Screen(val label: String) {
+    TODAY("Today"),
+    FRIDGE("Storage"),
+    FREEZER("Storage"),
+    PANTRY("Storage"),
+    GARAGE_FREEZER("Storage"),
+    MINI_FRIDGE("Storage"),
+    OTHER("Storage"),
+    RECIPES("Recipes"),
+    RESTOCK("Shop"),
+    SETTINGS("Info"),
+    PLUS("Plus"),
+    SCAN("Scan")
+}
+
+private val storageScreens = listOf(
+    Screen.FRIDGE,
+    Screen.FREEZER,
+    Screen.PANTRY,
+    Screen.GARAGE_FREEZER,
+    Screen.MINI_FRIDGE,
+    Screen.OTHER
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -134,13 +164,40 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
     var screen by rememberSaveable { mutableStateOf(Screen.TODAY) }
     var editingFood by remember { mutableStateOf<FoodItemEntity?>(null) }
     var addingFood by remember { mutableStateOf<FoodItemEntity?>(null) }
+    var upgradePrompt by remember { mutableStateOf<FeatureGateResult.UpgradeRequired?>(null) }
+
+    fun showGate(result: FeatureGateResult): Boolean {
+        return when (result) {
+            FeatureGateResult.Allowed -> true
+            is FeatureGateResult.UpgradeRequired -> {
+                upgradePrompt = result
+                false
+            }
+        }
+    }
+
+    fun addFoodIfAllowed(item: FoodItemEntity) {
+        if (showGate(FridgeFinishFeatureGate.gateAddItem(uiState.subscription))) {
+            addingFood = item
+        }
+    }
 
     FridgeFinishTheme {
+        upgradePrompt?.let { prompt ->
+            UpgradePromptDialog(
+                prompt = prompt,
+                onDismiss = { upgradePrompt = null },
+                onOpenPlus = {
+                    upgradePrompt = null
+                    screen = Screen.PLUS
+                }
+            )
+        }
         Scaffold(
             topBar = { TopAppBar(title = { Text(if (editingFood != null || addingFood != null) "Food item" else "Fridge Finish") }) },
             floatingActionButton = {
-                if (editingFood == null && addingFood == null && screen != Screen.RESTOCK && screen != Screen.SETTINGS && screen != Screen.SCAN) {
-                    FloatingActionButton(onClick = { addingFood = viewModel.presetFood(FoodCategory.OTHER) }) {
+                if (editingFood == null && addingFood == null && screen !in listOf(Screen.RESTOCK, Screen.SETTINGS, Screen.PLUS, Screen.SCAN)) {
+                    FloatingActionButton(onClick = { addFoodIfAllowed(viewModel.presetFood(FoodCategory.OTHER)) }) {
                         Icon(Icons.Default.Add, contentDescription = "Add food")
                     }
                 }
@@ -150,7 +207,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                     NavigationBar {
                         listOf(Screen.TODAY, Screen.FRIDGE, Screen.RECIPES, Screen.RESTOCK, Screen.SETTINGS).forEach { item ->
                             NavigationBarItem(
-                                selected = screen == item || (item == Screen.FRIDGE && screen in listOf(Screen.FRIDGE, Screen.FREEZER, Screen.PANTRY)),
+                                selected = screen == item || (item == Screen.FRIDGE && screen in storageScreens),
                                 onClick = { screen = item },
                                 icon = {
                         Icon(
@@ -181,6 +238,12 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                 when {
                     editingFood != null || addingFood != null -> FoodEditorScreen(
                         initial = editingFood ?: addingFood!!,
+                        subscriptionState = uiState.subscription,
+                        onOpenPlus = {
+                            editingFood = null
+                            addingFood = null
+                            screen = Screen.PLUS
+                        },
                         onSave = {
                             viewModel.saveFood(it)
                             editingFood = null
@@ -200,9 +263,13 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                     )
                     screen == Screen.TODAY -> TodayScreen(
                         uiState = uiState,
-                        onAddFood = { addingFood = viewModel.presetFood(FoodCategory.OTHER) },
-                        onAddLeftovers = { addingFood = viewModel.presetFood(FoodCategory.LEFTOVERS) },
-                        onAddRestock = { screen = Screen.RESTOCK },
+                        onAddFood = { addFoodIfAllowed(viewModel.presetFood(FoodCategory.OTHER)) },
+                        onAddLeftovers = { addFoodIfAllowed(viewModel.presetFood(FoodCategory.LEFTOVERS)) },
+                        onAddRestock = {
+                            if (showGate(FridgeFinishFeatureGate.gateFeature(PlusFeature.SmartGroceryList, uiState.subscription))) {
+                                screen = Screen.RESTOCK
+                            }
+                        },
                         onScanBarcode = {
                             viewModel.clearBarcodeLookup()
                             screen = Screen.SCAN
@@ -210,31 +277,48 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                         onEdit = { editingFood = it },
                         onFinish = { viewModel.markFinished(it) }
                     )
-                    screen == Screen.FRIDGE -> FoodListScreen(FoodLocation.FRIDGE, uiState, { screen = it.toScreen() }, { viewModel.markFinished(it) }, viewModel::deleteFood) { editingFood = it }
-                    screen == Screen.FREEZER -> FoodListScreen(FoodLocation.FREEZER, uiState, { screen = it.toScreen() }, { viewModel.markFinished(it) }, viewModel::deleteFood) { editingFood = it }
-                    screen == Screen.PANTRY -> FoodListScreen(FoodLocation.PANTRY, uiState, { screen = it.toScreen() }, { viewModel.markFinished(it) }, viewModel::deleteFood) { editingFood = it }
-                    screen == Screen.RECIPES -> RecipeIdeasScreen(uiState)
-                    screen == Screen.RESTOCK -> RestockScreen(uiState, viewModel::saveRestock, viewModel::toggleRestock, viewModel::deleteRestock)
+                    screen in storageScreens -> FoodListScreen(
+                        location = screen.toLocation(),
+                        uiState = uiState,
+                        onLocationSelected = { location ->
+                            if (location == FoodLocation.FRIDGE || showGate(FridgeFinishFeatureGate.gateFeature(PlusFeature.MultipleStorageLocations, uiState.subscription))) {
+                                screen = location.toScreen()
+                            }
+                        },
+                        onOpenPlus = { screen = Screen.PLUS },
+                        onFinish = { viewModel.markFinished(it) },
+                        onDelete = viewModel::deleteFood
+                    ) { editingFood = it }
+                    screen == Screen.RECIPES -> RecipeIdeasScreen(uiState, onOpenPlus = { screen = Screen.PLUS })
+                    screen == Screen.RESTOCK -> RestockScreen(uiState, onOpenPlus = { screen = Screen.PLUS }, viewModel::saveRestock, viewModel::toggleRestock, viewModel::deleteRestock)
                     screen == Screen.SETTINGS -> SettingsScreen(
+                        subscriptionState = uiState.subscription,
+                        onOpenPlus = { screen = Screen.PLUS },
+                        onRestorePurchases = viewModel::restorePlusPurchases,
                         onAddSamples = viewModel::addSampleData
+                    )
+                    screen == Screen.PLUS -> FridgeFinishPlusScreen(
+                        subscriptionState = uiState.subscription,
+                        onStartPurchase = viewModel::startPlusPurchase,
+                        onBack = { screen = Screen.SETTINGS }
                     )
                     screen == Screen.SCAN -> BarcodeScannerScreen(
                         lookupState = barcodeLookup,
                         onBarcodeScanned = viewModel::lookupBarcode,
                         onUseProduct = { product ->
-                            addingFood = viewModel.presetFood(product.category).copy(
+                            addFoodIfAllowed(viewModel.presetFood(product.category).copy(
                                 name = product.name,
                                 barcode = product.barcode,
                                 imageUri = product.imageUrl,
                                 notes = "Added from barcode scan. Check the package date before saving."
-                            )
+                            ))
                             viewModel.clearBarcodeLookup()
                         },
                         onUseBarcodeManually = { barcode ->
-                            addingFood = viewModel.presetFood(FoodCategory.OTHER).copy(
+                            addFoodIfAllowed(viewModel.presetFood(FoodCategory.OTHER).copy(
                                 barcode = barcode,
                                 notes = "Barcode: $barcode. Check the package date before saving."
-                            )
+                            ))
                             viewModel.clearBarcodeLookup()
                         },
                         onCancel = {
@@ -264,7 +348,10 @@ private fun TodayScreen(
             Text("Expiration dates are reminders, not safety guarantees.", style = MaterialTheme.typography.bodyMedium)
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+            ) {
                 CountCard("Past date", uiState.expiredCount, Modifier.weight(1f))
                 CountCard("Today", uiState.expiresTodayCount, Modifier.weight(1f))
                 CountCard("Eat soon", uiState.eatSoonCount, Modifier.weight(1f))
@@ -323,6 +410,7 @@ private fun FoodListScreen(
     location: FoodLocation,
     uiState: FridgeFinishUiState,
     onLocationSelected: (FoodLocation) -> Unit,
+    onOpenPlus: () -> Unit,
     onFinish: (FoodItemEntity) -> Unit,
     onDelete: (FoodItemEntity) -> Unit,
     onEdit: (FoodItemEntity) -> Unit
@@ -341,12 +429,17 @@ private fun FoodListScreen(
             Text("Storage", style = MaterialTheme.typography.titleLarge)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 FoodLocation.entries.forEach { option ->
+                    val locked = option != FoodLocation.FRIDGE && !uiState.subscription.isPlus
                     FilterChip(
                         selected = location == option,
                         onClick = { onLocationSelected(option) },
-                        label = { Text(option.label) }
+                        label = { Text(if (locked) "${option.label} Plus" else option.label) }
                     )
                 }
+            }
+            if (!uiState.subscription.isPlus) {
+                Text("Free keeps one storage location. Plus adds freezer, pantry, garage freezer, mini fridge, and other.")
+                TextButton(onClick = onOpenPlus) { Text("View Plus storage") }
             }
             OutlinedTextField(
                 value = search,
@@ -416,6 +509,18 @@ private fun FoodLocation.toScreen(): Screen = when (this) {
     FoodLocation.FRIDGE -> Screen.FRIDGE
     FoodLocation.FREEZER -> Screen.FREEZER
     FoodLocation.PANTRY -> Screen.PANTRY
+    FoodLocation.GARAGE_FREEZER -> Screen.GARAGE_FREEZER
+    FoodLocation.MINI_FRIDGE -> Screen.MINI_FRIDGE
+    FoodLocation.OTHER -> Screen.OTHER
+}
+
+private fun Screen.toLocation(): FoodLocation = when (this) {
+    Screen.FREEZER -> FoodLocation.FREEZER
+    Screen.PANTRY -> FoodLocation.PANTRY
+    Screen.GARAGE_FREEZER -> FoodLocation.GARAGE_FREEZER
+    Screen.MINI_FRIDGE -> FoodLocation.MINI_FRIDGE
+    Screen.OTHER -> FoodLocation.OTHER
+    else -> FoodLocation.FRIDGE
 }
 
 private data class RecipeIdea(
@@ -430,7 +535,15 @@ private data class RecipeIdea(
 )
 
 @Composable
-private fun RecipeIdeasScreen(uiState: FridgeFinishUiState) {
+private fun RecipeIdeasScreen(uiState: FridgeFinishUiState, onOpenPlus: () -> Unit) {
+    if (!uiState.subscription.isPlus) {
+        PlusLockedScreen(
+            title = "Recipe ideas are in Plus",
+            body = "Fridge Finish Plus suggests recipe ideas from ingredients that are expiring soon. Your basic expiration list stays free.",
+            onOpenPlus = onOpenPlus
+        )
+        return
+    }
     val ideas = remember(uiState.activeFoods) { buildRecipeIdeas(uiState) }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
@@ -530,6 +643,8 @@ private fun StatusChip(status: FreshnessStatus) {
 @Composable
 private fun FoodEditorScreen(
     initial: FoodItemEntity,
+    subscriptionState: FridgeFinishSubscriptionState,
+    onOpenPlus: () -> Unit,
     onSave: (FoodItemEntity) -> Unit,
     onCancel: () -> Unit,
     onScanBarcode: () -> Unit
@@ -550,6 +665,11 @@ private fun FoodEditorScreen(
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) imageUri = uri.toString()
     }
+    val availableLocations = if (subscriptionState.isPlus) {
+        FoodLocation.entries
+    } else {
+        (listOf(FoodLocation.FRIDGE) + initial.location).distinct()
+    }
 
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
@@ -558,18 +678,24 @@ private fun FoodEditorScreen(
             OutlinedTextField(name, { name = it }, label = { Text("Food name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             OutlinedButton(onClick = onScanBarcode) { Text("Scan barcode") }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SimpleMenu("Location", location.label, FoodLocation.entries.map { it.label }) { label -> location = FoodLocation.entries.first { it.label == label } }
+                SimpleMenu("Location", location.label, availableLocations.map { it.label }) { label -> location = availableLocations.first { it.label == label } }
                 SimpleMenu("Category", category.label, FoodCategory.entries.map { it.label }) { label ->
                     category = FoodCategory.fromLabel(label)
                     reminderDays = FreshnessCalculator.defaultReminderDays(category).toString()
                 }
+            }
+            if (!subscriptionState.isPlus) {
+                Text("Free uses Main Fridge and standard reminder timing.")
+                TextButton(onClick = onOpenPlus) { Text("View Plus organization") }
             }
             OutlinedTextField(quantity, { quantity = it }, label = { Text("Quantity") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(unit, { unit = it }, label = { Text("Unit") }, modifier = Modifier.fillMaxWidth())
             DateInput("Purchase date", purchaseDate) { purchaseDate = it }
             DateInput("Opened date", openedDate) { openedDate = it }
             DateInput("Expiration date", expirationDate) { expirationDate = it }
-            OutlinedTextField(reminderDays, { reminderDays = it }, label = { Text("Reminder days before expiration") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+            if (subscriptionState.isPlus) {
+                OutlinedTextField(reminderDays, { reminderDays = it }, label = { Text("Reminder days before expiration") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+            }
             OutlinedTextField(barcode, { barcode = it }, label = { Text("Barcode") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(imageUri, { imageUri = it }, label = { Text("Product image URL") }, modifier = Modifier.fillMaxWidth())
             imageUri.takeIf { it.isNotBlank() }?.let {
@@ -599,7 +725,11 @@ private fun FoodEditorScreen(
                             purchaseDate = parseDate(purchaseDate),
                             openedDate = parseDate(openedDate),
                             expirationDate = parsedExpiration,
-                            reminderDaysBefore = reminderDays.toIntOrNull()?.coerceAtLeast(0) ?: FreshnessCalculator.defaultReminderDays(category),
+                            reminderDaysBefore = if (subscriptionState.isPlus) {
+                                reminderDays.toIntOrNull()?.coerceAtLeast(0) ?: FreshnessCalculator.defaultReminderDays(category)
+                            } else {
+                                FreshnessCalculator.defaultReminderDays(category)
+                            },
                             notes = notes.takeIf { it.isNotBlank() },
                             imageUri = imageUri.takeIf { it.isNotBlank() },
                             barcode = barcode.takeIf { it.isNotBlank() }
@@ -615,10 +745,19 @@ private fun FoodEditorScreen(
 @Composable
 private fun RestockScreen(
     uiState: FridgeFinishUiState,
+    onOpenPlus: () -> Unit,
     onSave: (RestockItemEntity) -> Unit,
     onToggle: (RestockItemEntity) -> Unit,
     onDelete: (RestockItemEntity) -> Unit
 ) {
+    if (!uiState.subscription.isPlus) {
+        PlusLockedScreen(
+            title = "Smart grocery list is in Plus",
+            body = "Plus turns finished and expiring food into a smarter shopping list. You can still track fridge items for free.",
+            onOpenPlus = onOpenPlus
+        )
+        return
+    }
     var name by rememberSaveable { mutableStateOf("") }
     var quantity by rememberSaveable { mutableStateOf("") }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -650,12 +789,29 @@ private fun RestockScreen(
 }
 
 @Composable
-private fun SettingsScreen(onAddSamples: () -> Unit) {
+private fun SettingsScreen(
+    subscriptionState: FridgeFinishSubscriptionState,
+    onOpenPlus: () -> Unit,
+    onRestorePurchases: () -> Unit,
+    onAddSamples: () -> Unit
+) {
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item {
             Text("Settings / About", style = MaterialTheme.typography.titleLarge)
             Text("Fridge Finish stores your food list on this device. No account is required, and there is no cloud sync.")
+            SettingsCard("Fridge Finish Plus") {
+                Text("Current plan: ${if (subscriptionState.isPlus) "Plus" else "Free"}")
+                Text("Free slots used: ${subscriptionState.activeItemCount}/${FridgeFinishSubscriptionState.FREE_ITEM_LIMIT}")
+                if (!subscriptionState.isPlus && subscriptionState.freeSlotsRemaining == 0) {
+                    Text("You reached the free item limit. Plus unlocks unlimited items.")
+                }
+                subscriptionState.billingMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onOpenPlus) { Text("View Plus") }
+                    OutlinedButton(onClick = onRestorePurchases) { Text("Restore") }
+                }
+            }
             Text("Notifications are local reminders before food dates arrive. If notifications are disabled, reminders will not appear.")
             Button(onClick = {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -665,6 +821,83 @@ private fun SettingsScreen(onAddSamples: () -> Unit) {
             OutlinedButton(onClick = onAddSamples) { Text("Add sample data") }
             Text("Fridge Finish helps you organize food dates and reminders. It does not determine whether food is safe to eat.")
             Text("Use your judgment and check before eating, especially when something is past date.")
+        }
+    }
+}
+
+@Composable
+private fun SettingsCard(title: String, content: @Composable () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            content()
+        }
+    }
+}
+
+@Composable
+private fun PlusLockedScreen(title: String, body: String, onOpenPlus: () -> Unit) {
+    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            Text(body)
+            Button(onClick = onOpenPlus) { Text("View Fridge Finish Plus") }
+        }
+    }
+}
+
+@Composable
+private fun UpgradePromptDialog(
+    prompt: FeatureGateResult.UpgradeRequired,
+    onDismiss: () -> Unit,
+    onOpenPlus: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(prompt.title) },
+        text = { Text(prompt.message) },
+        confirmButton = { Button(onClick = onOpenPlus) { Text("View Plus") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } }
+    )
+}
+
+@Composable
+private fun FridgeFinishPlusScreen(
+    subscriptionState: FridgeFinishSubscriptionState,
+    onStartPurchase: () -> Unit,
+    onBack: () -> Unit
+) {
+    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            Text("Fridge Finish Plus", style = MaterialTheme.typography.titleLarge)
+            Text("A fair upgrade for deeper organization and planning. Basic fridge tracking stays free.")
+        }
+        item {
+            PlanCard("Free", FridgeFinishPlans.freeBenefits)
+        }
+        item {
+            PlanCard("Plus", FridgeFinishPlans.plusBenefits)
+        }
+        item {
+            SettingsCard("Billing status") {
+                Text("Google Play Billing is not connected in this build. The app will not start a real purchase or fake an upgrade until billing is implemented.")
+                subscriptionState.billingMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                Button(onClick = onStartPurchase, modifier = Modifier.fillMaxWidth()) {
+                    Text("Check upgrade availability")
+                }
+                OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+                    Text("Maybe later")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlanCard(title: String, benefits: List<String>) {
+    SettingsCard(title) {
+        benefits.forEach { benefit ->
+            Text("- $benefit")
         }
     }
 }
