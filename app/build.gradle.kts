@@ -13,8 +13,8 @@ android {
         applicationId = "com.fridgefinish.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.5-admin-plus-access"
+        versionCode = 7
+        versionName = "1.6-premium-polish"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

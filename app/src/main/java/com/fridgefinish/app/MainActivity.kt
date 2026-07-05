@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -48,6 +49,7 @@ import androidx.compose.material.icons.filled.Kitchen
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -60,6 +62,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -194,7 +197,24 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
             )
         }
         Scaffold(
-            topBar = { TopAppBar(title = { Text(if (editingFood != null || addingFood != null) "Food item" else "Fridge Finish") }) },
+            topBar = {
+                TopAppBar(
+                    title = {
+                        if (editingFood != null || addingFood != null) {
+                            Text("Food item")
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Fridge Finish")
+                                PlusStatusChip(uiState.subscription)
+                            }
+                        }
+                    }
+                )
+            },
             floatingActionButton = {
                 if (editingFood == null && addingFood == null && screen !in listOf(Screen.RESTOCK, Screen.SETTINGS, Screen.PLUS, Screen.SCAN)) {
                     FloatingActionButton(onClick = { addFoodIfAllowed(viewModel.presetFood(FoodCategory.OTHER)) }) {
@@ -426,14 +446,53 @@ private fun FoodListScreen(
 
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
-            Text("Storage", style = MaterialTheme.typography.titleLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Storage", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        location.label,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                PlusStatusChip(uiState.subscription)
+            }
+            if (uiState.subscription.isPlus) {
+                PlusAccessCard(uiState.subscription)
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+            ) {
                 FoodLocation.entries.forEach { option ->
                     val locked = option != FoodLocation.FRIDGE && !uiState.subscription.isPlus
                     FilterChip(
                         selected = location == option,
                         onClick = { onLocationSelected(option) },
-                        label = { Text(if (locked) "${option.label} Plus" else option.label) }
+                        modifier = Modifier.widthIn(min = if (option == FoodLocation.GARAGE_FREEZER) 132.dp else 92.dp),
+                        label = {
+                            Text(
+                                if (locked) "${option.label} Plus" else option.label,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
+                        leadingIcon = if (!locked && option != FoodLocation.FRIDGE && uiState.subscription.isPlus) {
+                            { Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                        } else {
+                            null
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
                     )
                 }
             }
@@ -454,8 +513,73 @@ private fun FoodListScreen(
                 SimpleMenu("Status", status, listOf("All") + FreshnessStatus.entries.map { it.label }) { status = it }
             }
         }
+        if (foods.isEmpty()) {
+            item {
+                EmptyStorageCard(location, uiState.subscription)
+            }
+        }
         items(foods, key = { it.id }) { item ->
             FoodCard(item, uiState.statusOf(item), onEdit, onFinish, onDelete)
+        }
+    }
+}
+
+@Composable
+private fun PlusStatusChip(subscriptionState: FridgeFinishSubscriptionState) {
+    val isPremium = subscriptionState.isPlus
+    AssistChip(
+        onClick = {},
+        leadingIcon = if (isPremium) {
+            { Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(16.dp)) }
+        } else {
+            null
+        },
+        label = { Text(if (isPremium) subscriptionState.planLabel else "Free") },
+        colors = androidx.compose.material3.AssistChipDefaults.assistChipColors(
+            containerColor = if (isPremium) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+            labelColor = if (isPremium) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            leadingIconContentColor = if (isPremium) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    )
+}
+
+@Composable
+private fun PlusAccessCard(subscriptionState: FridgeFinishSubscriptionState) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                if (subscriptionState.hasAdminAccess) "Admin Plus is active" else "Fridge Finish Plus is active",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Text(
+                "Multiple storage locations, recipes, and smart shopping tools are unlocked.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyStorageCard(location: FoodLocation, subscriptionState: FridgeFinishSubscriptionState) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Nothing in ${location.label} yet", style = MaterialTheme.typography.titleMedium)
+            Text(
+                if (subscriptionState.isPlus) {
+                    "Use + to add an item here, or scan a barcode from the Scan tab."
+                } else {
+                    "Use + to add your first fridge item."
+                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
