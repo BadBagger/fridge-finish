@@ -1,0 +1,13 @@
+.gradle/
+.idea/
+build/
+app/build/
+local.properties
+*.iml
+*.apk
+*.aab
+.android-sdk/
+.build-tools/
+.codex-remote-attachments/
+hs_err_pid*.log
+replay_pid*.log
