@@ -321,7 +321,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                                 viewModel.saveRestock(
                                     RestockItemEntity(
                                         name = missing,
-                                        category = FoodCategory.OTHER,
+                                        category = missing.inferShoppingCategory(),
                                         quantity = "For ${idea.title}"
                                     )
                                 )
@@ -924,7 +924,10 @@ private fun buildRecipeIdeas(uiState: FridgeFinishUiState): List<RecipeIdea> {
         val ingredients = ingredientsByRecipe[recipe.id].orEmpty()
         val matchedFoods = ingredients.mapNotNull { ingredient -> foods.firstOrNull { food -> ingredient.matches(food) } }
         val haveItems = matchedFoods.map { it.name.ifBlank { it.category.label } }
-        val missing = ingredients.filter { ingredient -> foods.none { food -> ingredient.matches(food) } && ingredient.required }.map { it.label }
+        val missing = ingredients
+            .filter { ingredient -> foods.none { food -> ingredient.matches(food) } && ingredient.required }
+            .map { it.shoppingLabel() }
+            .distinct()
         if (haveItems.isEmpty() || missing.size > 2) return@mapNotNull null
         val urgent = matchedFoods.count { food -> uiState.statusOf(food) in listOf(FreshnessStatus.EXPIRES_TODAY, FreshnessStatus.EAT_SOON, FreshnessStatus.EXPIRED) }
         RecipeIdea(
@@ -942,6 +945,36 @@ private fun buildRecipeIdeas(uiState: FridgeFinishUiState): List<RecipeIdea> {
             .thenByDescending { it.urgentCount }
             .thenBy { it.minutes }
     )
+}
+
+private fun RecipeIngredientEntity.shoppingLabel(): String {
+    val clean = label.trim()
+    return when (clean.lowercase()) {
+        "produce", "vegetables" -> "spinach, peppers, or carrots"
+        "greens or vegetables" -> "spinach or peppers"
+        "fruit" -> "berries or bananas"
+        "dairy or protein" -> "cheese, yogurt, or hummus"
+        "protein or leftovers" -> "chicken, eggs, or tofu"
+        "base" -> "broth or beans"
+        "filling" -> "beans, peppers, or leftovers"
+        "frozen item" -> "frozen fruit"
+        "crunch" -> "granola or nuts"
+        else -> clean
+    }
+}
+
+private fun String.inferShoppingCategory(): FoodCategory {
+    val text = lowercase()
+    return when {
+        listOf("spinach", "pepper", "carrot", "lettuce", "berries", "banana", "apple", "celery", "tomato", "peas").any { text.contains(it) } -> FoodCategory.PRODUCE
+        listOf("cheese", "yogurt", "milk").any { text.contains(it) } -> FoodCategory.DAIRY
+        listOf("chicken", "egg", "tofu", "protein").any { text.contains(it) } -> FoodCategory.MEAT
+        listOf("rice", "pasta", "broth", "beans", "tortilla", "granola").any { text.contains(it) } -> FoodCategory.PANTRY
+        listOf("cracker", "pretzel", "nuts").any { text.contains(it) } -> FoodCategory.SNACKS
+        text.contains("sauce") || text.contains("dressing") -> FoodCategory.CONDIMENTS
+        text.contains("frozen") -> FoodCategory.FROZEN
+        else -> FoodCategory.OTHER
+    }
 }
 
 private fun RecipeIngredientEntity.matches(food: FoodItemEntity): Boolean {
@@ -1562,10 +1595,31 @@ private fun DateInput(label: String, value: String, onValueChange: (String) -> U
     var scanMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var scannedText by rememberSaveable { mutableStateOf("") }
     var detectedDates by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var dateLocked by rememberSaveable { mutableStateOf(false) }
     val selectedMillis = parseDate(value)?.atStartOfDay(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
     val pickerState = rememberDatePickerState(initialSelectedDateMillis = selectedMillis)
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (showLiveScanner) {
+            DateOcrLiveScanner(
+                onResult = { rawText, candidates ->
+                    if (dateLocked) return@DateOcrLiveScanner
+                    scannedText = rawText.replace('\n', ' ').trim()
+                    val foundDates = candidates.map { it.toString() }
+                    if (foundDates.isNotEmpty()) {
+                        val firstDate = foundDates.first()
+                        dateLocked = true
+                        detectedDates = foundDates
+                        onValueChange(firstDate)
+                        scanMessage = "Found $firstDate. Scanner paused so you can review it."
+                        showLiveScanner = false
+                    } else if (scannedText.isNotBlank()) {
+                        scanMessage = "Reading text, but no date matched yet. Move closer and reduce background text."
+                    }
+                },
+                onClose = { showLiveScanner = false }
+            )
+        }
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
@@ -1581,26 +1635,18 @@ private fun DateInput(label: String, value: String, onValueChange: (String) -> U
                     scanMessage = if (!showLiveScanner) "Fill the camera with the printed date only." else null
                     scannedText = ""
                     detectedDates = emptyList()
+                    dateLocked = false
                 }
             ) { Text(if (showLiveScanner) "Close scanner" else "Scan $label") }
             if (value.isNotBlank()) {
-                TextButton(onClick = { onValueChange("") }) { Text("Clear") }
+                TextButton(onClick = {
+                    onValueChange("")
+                    detectedDates = emptyList()
+                    scannedText = ""
+                    scanMessage = null
+                    dateLocked = false
+                }) { Text("Clear") }
             }
-        }
-        if (showLiveScanner) {
-            DateOcrLiveScanner(
-                onResult = { rawText, candidates ->
-                    scannedText = rawText.replace('\n', ' ').trim()
-                    detectedDates = candidates.map { it.toString() }
-                    if (detectedDates.isNotEmpty()) {
-                        onValueChange(detectedDates.first())
-                        scanMessage = "Found ${detectedDates.first()}. Tap another option below if needed."
-                    } else if (scannedText.isNotBlank()) {
-                        scanMessage = "Reading text, but no date matched yet. Move closer and reduce background text."
-                    }
-                },
-                onClose = { showLiveScanner = false }
-            )
         }
         scanMessage?.let {
             Card(
@@ -1615,7 +1661,12 @@ private fun DateInput(label: String, value: String, onValueChange: (String) -> U
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
                 detectedDates.take(3).forEach { candidate ->
                     AssistChip(
-                        onClick = { onValueChange(candidate) },
+                        onClick = {
+                            onValueChange(candidate)
+                            scanMessage = "Using $candidate."
+                            showLiveScanner = false
+                            dateLocked = true
+                        },
                         label = { Text(candidate) }
                     )
                 }
@@ -1706,7 +1757,7 @@ private fun LiveDateCamera(onResult: (rawText: String, candidates: List<LocalDat
     }
 
     AndroidView(
-        modifier = Modifier.fillMaxWidth().height(260.dp),
+        modifier = Modifier.fillMaxWidth().height(220.dp),
         factory = { viewContext ->
             val previewView = PreviewView(viewContext)
             val providerFuture = ProcessCameraProvider.getInstance(viewContext)
