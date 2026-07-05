@@ -7,6 +7,8 @@ import com.fridgefinish.app.FridgeFinishApplication
 import com.fridgefinish.app.data.BarcodeProduct
 import com.fridgefinish.app.data.FoodItemEntity
 import com.fridgefinish.app.data.ProductLookupRepository
+import com.fridgefinish.app.data.RecipeEntity
+import com.fridgefinish.app.data.RecipeIngredientEntity
 import com.fridgefinish.app.data.RestockItemEntity
 import com.fridgefinish.app.domain.FoodCategory
 import com.fridgefinish.app.domain.FoodLocation
@@ -23,7 +25,9 @@ import java.time.LocalDate
 
 data class FridgeFinishUiState(
     val foods: List<FoodItemEntity> = emptyList(),
-    val restock: List<RestockItemEntity> = emptyList()
+    val restock: List<RestockItemEntity> = emptyList(),
+    val recipes: List<RecipeEntity> = emptyList(),
+    val recipeIngredients: List<RecipeIngredientEntity> = emptyList()
 ) {
     val activeFoods: List<FoodItemEntity> =
         foods.filterNot { it.isFinished }.sortedBy {
@@ -46,11 +50,20 @@ class FridgeFinishViewModel(application: Application) : AndroidViewModel(applica
     private val _barcodeLookup = MutableStateFlow<BarcodeLookupState>(BarcodeLookupState.Idle)
     val barcodeLookup = _barcodeLookup.asStateFlow()
 
+    init {
+        viewModelScope.launch { repository.seedRecipeDatabaseIfNeeded() }
+    }
+
     val uiState: StateFlow<FridgeFinishUiState> = combine(
-        repository.foods,
-        repository.restockItems
-    ) { foods, restock ->
-        FridgeFinishUiState(foods = foods, restock = restock)
+        combine(repository.foods, repository.restockItems) { foods, restock -> foods to restock },
+        combine(repository.recipes, repository.recipeIngredients) { recipes, ingredients -> recipes to ingredients }
+    ) { foodData, recipeData ->
+        FridgeFinishUiState(
+            foods = foodData.first,
+            restock = foodData.second,
+            recipes = recipeData.first,
+            recipeIngredients = recipeData.second
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FridgeFinishUiState())
 
     fun saveFood(item: FoodItemEntity) {

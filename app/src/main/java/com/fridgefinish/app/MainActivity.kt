@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Kitchen
+import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.AssistChip
@@ -93,6 +94,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fridgefinish.app.data.FoodItemEntity
+import com.fridgefinish.app.data.RecipeEntity
+import com.fridgefinish.app.data.RecipeIngredientEntity
 import com.fridgefinish.app.data.RestockItemEntity
 import com.fridgefinish.app.domain.FoodCategory
 import com.fridgefinish.app.domain.FoodLocation
@@ -121,7 +124,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen(val label: String) { TODAY("Today"), FRIDGE("Storage"), FREEZER("Storage"), PANTRY("Storage"), RESTOCK("Shop"), SETTINGS("Info"), SCAN("Scan") }
+private enum class Screen(val label: String) { TODAY("Today"), FRIDGE("Storage"), FREEZER("Storage"), PANTRY("Storage"), RECIPES("Recipes"), RESTOCK("Shop"), SETTINGS("Info"), SCAN("Scan") }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -145,7 +148,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
             bottomBar = {
                 if (editingFood == null && addingFood == null) {
                     NavigationBar {
-                        listOf(Screen.TODAY, Screen.SCAN, Screen.FRIDGE, Screen.RESTOCK, Screen.SETTINGS).forEach { item ->
+                        listOf(Screen.TODAY, Screen.FRIDGE, Screen.RECIPES, Screen.RESTOCK, Screen.SETTINGS).forEach { item ->
                             NavigationBarItem(
                                 selected = screen == item || (item == Screen.FRIDGE && screen in listOf(Screen.FRIDGE, Screen.FREEZER, Screen.PANTRY)),
                                 onClick = { screen = item },
@@ -155,6 +158,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                                 Screen.TODAY -> Icons.Default.Home
                                 Screen.RESTOCK -> Icons.Default.ShoppingCart
                                 Screen.SETTINGS -> Icons.Default.Info
+                                Screen.RECIPES -> Icons.Default.Restaurant
                                 Screen.SCAN -> Icons.Default.Search
                                 else -> Icons.Default.Kitchen
                             },
@@ -209,6 +213,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                     screen == Screen.FRIDGE -> FoodListScreen(FoodLocation.FRIDGE, uiState, { screen = it.toScreen() }, { viewModel.markFinished(it) }, viewModel::deleteFood) { editingFood = it }
                     screen == Screen.FREEZER -> FoodListScreen(FoodLocation.FREEZER, uiState, { screen = it.toScreen() }, { viewModel.markFinished(it) }, viewModel::deleteFood) { editingFood = it }
                     screen == Screen.PANTRY -> FoodListScreen(FoodLocation.PANTRY, uiState, { screen = it.toScreen() }, { viewModel.markFinished(it) }, viewModel::deleteFood) { editingFood = it }
+                    screen == Screen.RECIPES -> RecipeIdeasScreen(uiState)
                     screen == Screen.RESTOCK -> RestockScreen(uiState, viewModel::saveRestock, viewModel::toggleRestock, viewModel::deleteRestock)
                     screen == Screen.SETTINGS -> SettingsScreen(
                         onAddSamples = viewModel::addSampleData
@@ -412,6 +417,103 @@ private fun FoodLocation.toScreen(): Screen = when (this) {
     FoodLocation.FREEZER -> Screen.FREEZER
     FoodLocation.PANTRY -> Screen.PANTRY
 }
+
+private data class RecipeIdea(
+    val title: String,
+    val minutes: Int,
+    val have: List<String>,
+    val missing: List<String>,
+    val urgentCount: Int,
+    val note: String,
+    val steps: String,
+    val sourceName: String
+)
+
+@Composable
+private fun RecipeIdeasScreen(uiState: FridgeFinishUiState) {
+    val ideas = remember(uiState.activeFoods) { buildRecipeIdeas(uiState) }
+    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            Text("Use what you have", style = MaterialTheme.typography.titleLarge)
+            Text("AI-built local recipe ideas based on your current food. Check dates and use your judgment.")
+        }
+        item {
+            Text("Ready or close", style = MaterialTheme.typography.titleMedium)
+            if (ideas.isEmpty()) Text("Add a few foods to see ideas here.")
+        }
+        items(ideas, key = { it.title }) { idea ->
+            RecipeIdeaCard(idea)
+        }
+    }
+}
+
+@Composable
+private fun RecipeIdeaCard(idea: RecipeIdea) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(idea.title, style = MaterialTheme.typography.titleMedium)
+                    Text("${idea.minutes} min - ${if (idea.missing.isEmpty()) "You can make this" else "Almost there"}")
+                }
+                if (idea.urgentCount > 0) {
+                    AssistChip(onClick = {}, label = { Text("Uses eat soon") })
+                }
+            }
+            Text(idea.note, style = MaterialTheme.typography.bodyMedium)
+            Text(idea.steps, style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                idea.have.take(4).forEach {
+                    AssistChip(onClick = {}, label = { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) })
+                }
+            }
+            if (idea.missing.isNotEmpty()) {
+                Text("Missing: ${idea.missing.joinToString(", ")}", style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(idea.sourceName, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+private fun buildRecipeIdeas(uiState: FridgeFinishUiState): List<RecipeIdea> {
+    val foods = uiState.activeFoods
+    val ingredientsByRecipe = uiState.recipeIngredients.groupBy { it.recipeId }
+
+    return uiState.recipes.mapNotNull { recipe ->
+        val ingredients = ingredientsByRecipe[recipe.id].orEmpty()
+        val matchedFoods = ingredients.mapNotNull { ingredient -> foods.firstOrNull { food -> ingredient.matches(food) } }
+        val haveItems = matchedFoods.map { it.name.ifBlank { it.category.label } }
+        val missing = ingredients.filter { ingredient -> foods.none { food -> ingredient.matches(food) } && ingredient.required }.map { it.label }
+        if (haveItems.isEmpty() || missing.size > 2) return@mapNotNull null
+        val urgent = matchedFoods.count { food -> uiState.statusOf(food) in listOf(FreshnessStatus.EXPIRES_TODAY, FreshnessStatus.EAT_SOON, FreshnessStatus.EXPIRED) }
+        RecipeIdea(
+            recipe.title,
+            recipe.minutes,
+            haveItems.distinct(),
+            missing,
+            urgent,
+            recipe.description,
+            recipe.steps,
+            recipe.sourceName
+        )
+    }.sortedWith(
+        compareBy<RecipeIdea> { it.missing.size }
+            .thenByDescending { it.urgentCount }
+            .thenBy { it.minutes }
+    )
+}
+
+private fun RecipeIngredientEntity.matches(food: FoodItemEntity): Boolean {
+    val keywordMatch = keywords.split(",").any { keyword ->
+        val trimmed = keyword.trim()
+        trimmed.isNotBlank() && food.name.contains(trimmed, ignoreCase = true)
+    }
+    val categoryMatch = category?.let { food.category.name.equals(it, ignoreCase = true) } ?: false
+    return keywordMatch || categoryMatch
+}
+
+private fun String.hasAny(vararg terms: String): Boolean =
+    terms.any { contains(it, ignoreCase = true) }
 
 @Composable
 private fun StatusChip(status: FreshnessStatus) {

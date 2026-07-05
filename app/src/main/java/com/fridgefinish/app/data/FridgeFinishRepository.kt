@@ -11,10 +11,13 @@ import java.time.LocalDate
 class FridgeFinishRepository(
     private val foodDao: FoodDao,
     private val restockDao: RestockDao,
+    private val recipeDao: RecipeDao,
     private val notifications: FoodNotificationScheduler
 ) {
     val foods: Flow<List<FoodItemEntity>> = foodDao.observeAll()
     val restockItems: Flow<List<RestockItemEntity>> = restockDao.observeAll()
+    val recipes: Flow<List<RecipeEntity>> = recipeDao.observeRecipes()
+    val recipeIngredients: Flow<List<RecipeIngredientEntity>> = recipeDao.observeIngredients()
 
     fun foodsByLocation(location: FoodLocation): Flow<List<FoodItemEntity>> =
         foodDao.observeByLocation(location)
@@ -76,4 +79,57 @@ class FridgeFinishRepository(
         )
         samples.forEach { saveFood(it) }
     }
+
+    suspend fun seedRecipeDatabaseIfNeeded() {
+        if (recipeDao.countRecipes() > 0) return
+        builtInRecipes().forEach { seed ->
+            val recipeId = recipeDao.insertRecipe(seed.recipe)
+            recipeDao.insertIngredients(seed.ingredients.map { it.copy(recipeId = recipeId) })
+        }
+    }
+
+    private data class SeedRecipe(
+        val recipe: RecipeEntity,
+        val ingredients: List<RecipeIngredientEntity>
+    )
+
+    private fun builtInRecipes(): List<SeedRecipe> = listOf(
+        seedRecipe("Quick omelet", 15, "Use eggs with produce and a little dairy.", "Whisk eggs, cook with chopped vegetables, then add cheese or dairy if available.", "eggs:egg", "greens or vegetables:spinach,tomato,pepper,onion,lettuce:PRODUCE", "cheese or dairy:cheese,milk,yogurt:DAIRY"),
+        seedRecipe("Yogurt fruit bowl", 5, "A fast way to use fruit and dairy.", "Spoon yogurt into a bowl, add fruit, then top with cereal, nuts, or snacks if available.", "yogurt:yogurt:DAIRY", "fruit:berry,berries,banana,apple,strawberry,mango:PRODUCE", "crunch:granola,cereal,nuts,cracker:SNACKS"),
+        seedRecipe("Leftover grain bowl", 12, "Use leftovers first with a pantry base.", "Warm leftovers with rice, pasta, or grains. Add produce or a sauce if available.", "leftovers:leftover:LEFTOVERS", "rice or grain:rice,quinoa,pasta,noodle:PANTRY", "vegetables:spinach,tomato,pepper,onion,lettuce:PRODUCE"),
+        seedRecipe("Smoothie", 5, "Use fruit, dairy, and frozen items.", "Blend fruit with milk or yogurt. Add frozen fruit or ice if available.", "fruit:berry,banana,mango,strawberry:PRODUCE", "milk or yogurt:milk,yogurt:DAIRY", "frozen item:frozen: FROZEN"),
+        seedRecipe("Simple salad", 10, "A flexible way to finish produce and leftovers.", "Combine greens with protein or leftovers. Add dressing, sauce, or condiments.", "greens:lettuce,spinach,greens,salad:PRODUCE", "protein or leftovers:chicken,egg,tofu,leftover:MEAT", "dressing or condiment:dressing,sauce,condiment:CONDIMENTS"),
+        seedRecipe("Snack plate", 5, "Low-effort plate for partial items.", "Pair produce with dairy, protein, crackers, or snacks.", "produce:apple,carrot,celery,grape,berry:PRODUCE", "dairy or protein:cheese,yogurt,egg,hummus:DAIRY", "crackers or snacks:cracker,chip,pretzel,nuts:SNACKS"),
+        seedRecipe("Pasta clean-out", 20, "Use pantry pasta with produce or leftovers.", "Cook pasta, then toss with vegetables, leftovers, and sauce or condiments.", "pasta:pasta,noodle:PANTRY", "vegetables:tomato,spinach,pepper,onion,broccoli:PRODUCE", "sauce or leftovers:sauce,leftover,chicken,meat:CONDIMENTS"),
+        seedRecipe("Soup starter", 30, "Use broth, leftovers, vegetables, or pantry grains.", "Simmer vegetables and leftovers with broth or water. Add rice, pasta, or beans if available.", "vegetables:carrot,celery,onion,spinach,tomato:PRODUCE", "base:broth,stock,soup,bean,rice,pasta:PANTRY", "protein or leftovers:leftover,chicken,meat,tofu:MEAT"),
+        seedRecipe("Quesadilla", 12, "Use cheese, tortillas, and leftovers.", "Fill a tortilla with cheese and leftovers or vegetables, then toast until warm.", "tortilla:tortilla,wrap:PANTRY", "cheese:cheese:DAIRY", "filling:leftover,chicken,pepper,onion,bean:LEFTOVERS"),
+        seedRecipe("Fried rice idea", 15, "Use rice, eggs, vegetables, and leftovers.", "Stir-fry rice with vegetables and egg or leftovers. Season with sauce or condiments.", "rice:rice:PANTRY", "egg or leftovers:egg,leftover,chicken,tofu:LEFTOVERS", "vegetables:pea,carrot,onion,pepper,spinach:PRODUCE")
+    )
+
+    private fun seedRecipe(
+        title: String,
+        minutes: Int,
+        description: String,
+        steps: String,
+        vararg ingredientSpecs: String
+    ): SeedRecipe =
+        SeedRecipe(
+            recipe = RecipeEntity(
+                title = title,
+                minutes = minutes,
+                description = description,
+                steps = steps,
+                sourceName = "Fridge Finish AI recipe database",
+                sourceUrl = null
+            ),
+            ingredients = ingredientSpecs.map { spec ->
+                val parts = spec.split(":")
+                RecipeIngredientEntity(
+                    recipeId = 0,
+                    label = parts[0],
+                    keywords = parts.getOrElse(1) { parts[0] },
+                    category = parts.getOrNull(2)?.trim()?.takeIf { it.isNotBlank() }
+                )
+            }
+        )
 }

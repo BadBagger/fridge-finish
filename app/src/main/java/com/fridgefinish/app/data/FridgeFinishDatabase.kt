@@ -7,14 +7,15 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 
 @Database(
-    entities = [FoodItemEntity::class, RestockItemEntity::class],
-    version = 2,
+    entities = [FoodItemEntity::class, RestockItemEntity::class, RecipeEntity::class, RecipeIngredientEntity::class],
+    version = 3,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
 abstract class FridgeFinishDatabase : RoomDatabase() {
     abstract fun foodDao(): FoodDao
     abstract fun restockDao(): RestockDao
+    abstract fun recipeDao(): RecipeDao
 
     companion object {
         @Volatile private var instance: FridgeFinishDatabase? = null

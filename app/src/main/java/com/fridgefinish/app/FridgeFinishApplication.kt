@@ -11,6 +11,7 @@ class FridgeFinishApplication : Application() {
         FridgeFinishRepository(
             foodDao = database.foodDao(),
             restockDao = database.restockDao(),
+            recipeDao = database.recipeDao(),
             notifications = FoodNotificationScheduler(this)
         )
     }
