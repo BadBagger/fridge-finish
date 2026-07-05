@@ -75,26 +75,51 @@ fun BarcodeScannerScreen(
     }
     var lastDetectedBarcode by remember { mutableStateOf("") }
     var manualBarcode by remember { mutableStateOf("") }
+    var showCamera by remember { mutableStateOf(true) }
+    val productFound = lookupState is BarcodeLookupState.Found
+    val scannerActive = lookupState !is BarcodeLookupState.Loading && lookupState !is BarcodeLookupState.Found
 
     LaunchedEffect(Unit) {
         if (!hasPermission) permissionLauncher.launch(Manifest.permission.CAMERA)
     }
 
+    LaunchedEffect(productFound) {
+        if (productFound) showCamera = false
+    }
+
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         ScanHeroCard(lookupState)
 
-        if (hasPermission) {
+        if (hasPermission && showCamera) {
             BarcodeCameraPreview { barcode ->
-                lastDetectedBarcode = barcode
-                manualBarcode = barcode
-                onBarcodeScanned(barcode)
+                if (scannerActive) {
+                    lastDetectedBarcode = barcode
+                    manualBarcode = barcode
+                    onBarcodeScanned(barcode)
+                }
             }
-        } else {
+        } else if (!hasPermission) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Camera permission is needed to scan barcodes.")
                     Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
                         Text("Allow camera")
+                    }
+                }
+            }
+        } else if (productFound) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.CameraAlt, contentDescription = null)
+                    Column(Modifier.weight(1f)) {
+                        Text("Camera paused", style = MaterialTheme.typography.titleMedium)
+                        Text("Review the product below or scan another barcode.")
+                    }
+                    OutlinedButton(onClick = { showCamera = true }) {
+                        Text("Rescan")
                     }
                 }
             }
@@ -164,7 +189,12 @@ fun BarcodeScannerScreen(
                     singleLine = true
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(onClick = { if (manualBarcode.isNotBlank()) onBarcodeScanned(manualBarcode) }, modifier = Modifier.weight(1f)) {
+                    OutlinedButton(onClick = {
+                        if (manualBarcode.isNotBlank()) {
+                            showCamera = false
+                            onBarcodeScanned(manualBarcode)
+                        }
+                    }, modifier = Modifier.weight(1f)) {
                         Text("Look up")
                     }
                     OutlinedButton(onClick = { if (manualBarcode.isNotBlank()) onUseBarcodeManually(manualBarcode) }, modifier = Modifier.weight(1f)) {
