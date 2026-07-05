@@ -46,10 +46,14 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Kitchen
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -309,7 +313,22 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                         onFinish = { viewModel.markFinished(it) },
                         onDelete = viewModel::deleteFood
                     ) { editingFood = it }
-                    screen == Screen.RECIPES -> RecipeIdeasScreen(uiState, onOpenPlus = { screen = Screen.PLUS })
+                    screen == Screen.RECIPES -> RecipeIdeasScreen(
+                        uiState = uiState,
+                        onOpenPlus = { screen = Screen.PLUS },
+                        onAddMissingToRestock = { idea ->
+                            idea.missing.forEach { missing ->
+                                viewModel.saveRestock(
+                                    RestockItemEntity(
+                                        name = missing,
+                                        category = FoodCategory.OTHER,
+                                        quantity = "For ${idea.title}"
+                                    )
+                                )
+                            }
+                            screen = Screen.RESTOCK
+                        }
+                    )
                     screen == Screen.RESTOCK -> RestockScreen(uiState, onOpenPlus = { screen = Screen.PLUS }, viewModel::saveRestock, viewModel::toggleRestock, viewModel::deleteRestock)
                     screen == Screen.SETTINGS -> SettingsScreen(
                         subscriptionState = uiState.subscription,
@@ -364,38 +383,95 @@ private fun TodayScreen(
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("Know what to eat before it goes bad.", style = MaterialTheme.typography.titleLarge)
-            Text("Expiration dates are reminders, not safety guarantees.", style = MaterialTheme.typography.bodyMedium)
+            TodayHeroCard(uiState)
         }
         item {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                CountCard("Past date", uiState.expiredCount, Modifier.weight(1f))
-                CountCard("Today", uiState.expiresTodayCount, Modifier.weight(1f))
-                CountCard("Eat soon", uiState.eatSoonCount, Modifier.weight(1f))
+                CountCard("Past date", uiState.expiredCount, FreshnessStatus.EXPIRED, Modifier.weight(1f))
+                CountCard("Today", uiState.expiresTodayCount, FreshnessStatus.EXPIRES_TODAY, Modifier.weight(1f))
+                CountCard("Eat soon", uiState.eatSoonCount, FreshnessStatus.EAT_SOON, Modifier.weight(1f))
             }
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onAddFood) { Text("Add food") }
-                Button(onClick = onScanBarcode) { Text("Scan barcode") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onScanBarcode, modifier = Modifier.weight(1f)) { Text("Scan barcode") }
+                Button(onClick = onAddFood, modifier = Modifier.weight(1f)) { Text("Add food") }
             }
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onAddLeftovers) { Text("Add leftovers") }
-                OutlinedButton(onClick = onAddRestock) { Text("Restock item") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = onAddLeftovers, modifier = Modifier.weight(1f)) { Text("Add leftovers") }
+                OutlinedButton(onClick = onAddRestock, modifier = Modifier.weight(1f)) { Text("Restock") }
             }
         }
         section("Eat first", uiState.topPriority.filter { uiState.statusOf(it) in listOf(FreshnessStatus.EXPIRED, FreshnessStatus.EAT_SOON) }, uiState, onEdit, onFinish)
         section("Expires today", uiState.activeFoods.filter { uiState.statusOf(it) == FreshnessStatus.EXPIRES_TODAY }, uiState, onEdit, onFinish)
         section("Coming up", uiState.activeFoods.filter { uiState.statusOf(it) == FreshnessStatus.FRESH }.take(5), uiState, onEdit, onFinish)
         item {
-            Text("Restock list", style = MaterialTheme.typography.titleMedium)
-            if (uiState.restockOpen.isEmpty()) Text("Nothing to restock right now.")
+            RestockPreviewCard(uiState)
         }
-        items(uiState.restockOpen.take(5), key = { it.id }) { Text("- ${it.name}${it.quantity?.let { q -> " - $q" }.orEmpty()}") }
+    }
+}
+
+@Composable
+private fun TodayHeroCard(uiState: FridgeFinishUiState) {
+    val nextItem = uiState.topPriority.firstOrNull()
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Eat first today", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Icon(Icons.Default.Notifications, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+            Text(
+                nextItem?.name?.takeIf { it.isNotBlank() } ?: "Your fridge is quiet right now",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                nextItem?.let { "${FreshnessCalculator.daysRemainingText(it.expirationDate)} - ${it.location.label}" }
+                    ?: "Add food or scan a barcode to start getting useful reminders.",
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Text(
+                "Dates are reminders, not safety guarantees. Check before eating.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+    }
+}
+
+@Composable
+private fun RestockPreviewCard(uiState: FridgeFinishUiState) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Restock list", style = MaterialTheme.typography.titleMedium)
+                AssistChip(onClick = {}, label = { Text("${uiState.restockOpen.size} open") })
+            }
+            if (uiState.restockOpen.isEmpty()) {
+                Text("Nothing to restock right now.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                uiState.restockOpen.take(4).forEach { item ->
+                    Text("${item.name}${item.quantity?.let { q -> " - $q" }.orEmpty()}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
     }
 }
 
@@ -407,8 +483,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.section(
     onFinish: (FoodItemEntity) -> Unit
 ) {
     item {
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        if (foodItems.isEmpty()) Text("No items here.")
+        SectionHeader(title, foodItems.size)
+        if (foodItems.isEmpty()) {
+            EmptySectionCard(title)
+        }
     }
     items(foodItems, key = { "$title-${it.id}" }) { item ->
         FoodCard(item, uiState.statusOf(item), onEdit, onFinish, onDelete = null)
@@ -416,9 +494,46 @@ private fun androidx.compose.foundation.lazy.LazyListScope.section(
 }
 
 @Composable
-private fun CountCard(label: String, count: Int, modifier: Modifier = Modifier) {
-    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-        Column(Modifier.padding(12.dp)) {
+private fun SectionHeader(title: String, count: Int) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Text("$count", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+@Composable
+private fun EmptySectionCard(title: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Text(
+            when (title) {
+                "Eat first" -> "No urgent food right now."
+                "Expires today" -> "Nothing expires today."
+                "Coming up" -> "Add more dates to see what is coming up."
+                else -> "No items here."
+            },
+            modifier = Modifier.padding(14.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun CountCard(label: String, count: Int, status: FreshnessStatus, modifier: Modifier = Modifier) {
+    val container = when (status) {
+        FreshnessStatus.EXPIRED -> MaterialTheme.colorScheme.errorContainer
+        FreshnessStatus.EXPIRES_TODAY -> Color(0xFFFFE1A8)
+        FreshnessStatus.EAT_SOON -> Color(0xFFD8EAD2)
+        else -> MaterialTheme.colorScheme.secondaryContainer
+    }
+    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = container)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(count.toString(), style = MaterialTheme.typography.headlineMedium)
             Text(label, style = MaterialTheme.typography.labelMedium)
         }
@@ -593,20 +708,20 @@ private fun FoodCard(
     onDelete: ((FoodItemEntity) -> Unit)?
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.Top) {
                 item.imageUri?.takeIf { it.isNotBlank() }?.let { imageUri ->
                     AsyncImage(
                         model = imageUri,
                         contentDescription = item.name,
-                        modifier = Modifier.size(48.dp).padding(end = 8.dp),
+                        modifier = Modifier.size(56.dp).padding(end = 10.dp),
                         contentScale = ContentScale.Crop
                     )
                 }
                 Column(Modifier.weight(1f)) {
                     Text(item.name.ifBlank { "Unnamed food" }, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        "${item.location.label} - ${item.category.label} - ${FreshnessCalculator.daysRemainingText(item.expirationDate)}",
+                        "${item.location.label} - ${item.category.label}",
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -615,15 +730,26 @@ private fun FoodCard(
                 StatusChip(status)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Expires ${item.expirationDate}", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                Column(Modifier.weight(1f)) {
+                    Text("Expires ${item.expirationDate}", style = MaterialTheme.typography.bodyMedium)
+                    Text(FreshnessCalculator.daysRemainingText(item.expirationDate), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                }
                 item.quantity?.takeIf { it.isNotBlank() }?.let {
                     Text("Qty $it ${item.unit.orEmpty()}", style = MaterialTheme.typography.bodyMedium)
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                IconButton(onClick = { onFinish(item) }) { Icon(Icons.Default.Check, contentDescription = "Finished") }
-                IconButton(onClick = { onEdit(item) }) { Icon(Icons.Default.Edit, contentDescription = "Edit") }
-                if (onDelete != null) IconButton(onClick = { onDelete(item) }) { Icon(Icons.Default.Delete, contentDescription = "Delete") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = { onFinish(item) }, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("Finished")
+                }
+                OutlinedButton(onClick = { onEdit(item) }, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("Edit")
+                }
+                if (onDelete != null) {
+                    IconButton(onClick = { onDelete(item) }) { Icon(Icons.Default.Delete, contentDescription = "Delete") }
+                }
             }
         }
     }
@@ -659,7 +785,11 @@ private data class RecipeIdea(
 )
 
 @Composable
-private fun RecipeIdeasScreen(uiState: FridgeFinishUiState, onOpenPlus: () -> Unit) {
+private fun RecipeIdeasScreen(
+    uiState: FridgeFinishUiState,
+    onOpenPlus: () -> Unit,
+    onAddMissingToRestock: (RecipeIdea) -> Unit
+) {
     if (!uiState.subscription.isPlus) {
         PlusLockedScreen(
             title = "Recipe ideas are in Plus",
@@ -669,43 +799,129 @@ private fun RecipeIdeasScreen(uiState: FridgeFinishUiState, onOpenPlus: () -> Un
         return
     }
     val ideas = remember(uiState.activeFoods) { buildRecipeIdeas(uiState) }
+    val readyIdeas = ideas.filter { it.missing.isEmpty() }
+    val almostIdeas = ideas.filter { it.missing.isNotEmpty() }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("Use what you have", style = MaterialTheme.typography.titleLarge)
-            Text("AI-built local recipe ideas based on your current food. Check dates and use your judgment.")
+            RecipeHeroCard(ideas, uiState)
         }
         item {
-            Text("Ready or close", style = MaterialTheme.typography.titleMedium)
-            if (ideas.isEmpty()) Text("Add a few foods to see ideas here.")
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                RecipeMetricCard("Ready", readyIdeas.size, Modifier.weight(1f))
+                RecipeMetricCard("Almost", almostIdeas.size, Modifier.weight(1f))
+                RecipeMetricCard("Eat soon", ideas.count { it.urgentCount > 0 }, Modifier.weight(1f))
+            }
         }
-        items(ideas, key = { it.title }) { idea ->
-            RecipeIdeaCard(idea)
+        item {
+            SectionHeader("Ready now", readyIdeas.size)
+            if (readyIdeas.isEmpty()) EmptyRecipeCard("No ready recipes yet. Add a few staple items or scan food you already have.")
+        }
+        items(readyIdeas, key = { "ready-${it.title}" }) { idea ->
+            RecipeIdeaCard(idea, onAddMissingToRestock)
+        }
+        item {
+            SectionHeader("Almost there", almostIdeas.size)
+            if (almostIdeas.isEmpty()) EmptyRecipeCard("No almost-ready ideas right now.")
+        }
+        items(almostIdeas, key = { "almost-${it.title}" }) { idea ->
+            RecipeIdeaCard(idea, onAddMissingToRestock)
         }
     }
 }
 
 @Composable
-private fun RecipeIdeaCard(idea: RecipeIdea) {
+private fun RecipeHeroCard(ideas: List<RecipeIdea>, uiState: FridgeFinishUiState) {
+    val best = ideas.firstOrNull()
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Cook from your fridge", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Icon(Icons.Default.Restaurant, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+            Text(
+                best?.title ?: "Add food to unlock recipe ideas",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                best?.let { if (it.missing.isEmpty()) "You can make this with what you have." else "You only need ${it.missing.size} more item${if (it.missing.size == 1) "" else "s"}." }
+                    ?: "${uiState.activeFoods.size} tracked items available for matching.",
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Text(
+                "Local recipe ideas. Check dates and use your judgment.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecipeMetricCard(label: String, count: Int, modifier: Modifier = Modifier) {
+    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(count.toString(), style = MaterialTheme.typography.headlineMedium)
+            Text(label, style = MaterialTheme.typography.labelMedium)
+        }
+    }
+}
+
+@Composable
+private fun EmptyRecipeCard(message: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Text(message, modifier = Modifier.padding(14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun RecipeIdeaCard(idea: RecipeIdea, onAddMissingToRestock: (RecipeIdea) -> Unit) {
     Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f)) {
                     Text(idea.title, style = MaterialTheme.typography.titleMedium)
-                    Text("${idea.minutes} min - ${if (idea.missing.isEmpty()) "You can make this" else "Almost there"}")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Timer, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Text("${idea.minutes} min")
+                        Text(if (idea.missing.isEmpty()) "Ready now" else "Almost there", color = MaterialTheme.colorScheme.primary)
+                    }
                 }
                 if (idea.urgentCount > 0) {
                     AssistChip(onClick = {}, label = { Text("Uses eat soon") })
                 }
             }
             Text(idea.note, style = MaterialTheme.typography.bodyMedium)
-            Text(idea.steps, style = MaterialTheme.typography.bodySmall)
+            Text(idea.steps, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("You have", style = MaterialTheme.typography.labelLarge)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 idea.have.take(4).forEach {
                     AssistChip(onClick = {}, label = { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) })
                 }
             }
             if (idea.missing.isNotEmpty()) {
-                Text("Missing: ${idea.missing.joinToString(", ")}", style = MaterialTheme.typography.bodyMedium)
+                Text("Add to make it", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                    idea.missing.forEach {
+                        AssistChip(onClick = {}, label = { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) })
+                    }
+                }
+                Button(onClick = { onAddMissingToRestock(idea) }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.ShoppingCart, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("Add missing to Shop")
+                }
             }
             Text(idea.sourceName, style = MaterialTheme.typography.bodySmall)
         }
@@ -786,6 +1002,17 @@ private fun FoodEditorScreen(
     var imageUri by rememberSaveable(initial.id) { mutableStateOf(initial.imageUri.orEmpty()) }
     var barcode by rememberSaveable(initial.id) { mutableStateOf(initial.barcode.orEmpty()) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
+    var showDetails by rememberSaveable(initial.id) {
+        mutableStateOf(
+            quantity.isNotBlank() ||
+                unit.isNotBlank() ||
+                purchaseDate.isNotBlank() ||
+                openedDate.isNotBlank() ||
+                notes.isNotBlank() ||
+                barcode.isNotBlank() ||
+                imageUri.isNotBlank()
+        )
+    }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) imageUri = uri.toString()
     }
@@ -797,41 +1024,99 @@ private fun FoodEditorScreen(
 
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
-            Text("Dates are reminders, not safety guarantees.", style = MaterialTheme.typography.bodyMedium)
+            AddFoodHeroCard(subscriptionState)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            OutlinedTextField(name, { name = it }, label = { Text("Food name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            OutlinedButton(onClick = onScanBarcode) { Text("Scan barcode") }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SimpleMenu("Location", location.label, availableLocations.map { it.label }) { label -> location = availableLocations.first { it.label == label } }
-                SimpleMenu("Category", category.label, FoodCategory.entries.map { it.label }) { label ->
-                    category = FoodCategory.fromLabel(label)
-                    reminderDays = FreshnessCalculator.defaultReminderDays(category).toString()
+        }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        imageUri.takeIf { it.isNotBlank() }?.let {
+                            AsyncImage(
+                                model = it,
+                                contentDescription = "Product image preview",
+                                modifier = Modifier.size(72.dp),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(name, { name = it }, label = { Text("Food name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            OutlinedButton(onClick = onScanBarcode, modifier = Modifier.fillMaxWidth()) { Text("Scan barcode") }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                        FoodCategory.entries.take(6).forEach { preset ->
+                            FilterChip(
+                                selected = category == preset,
+                                onClick = {
+                                    category = preset
+                                    reminderDays = FreshnessCalculator.defaultReminderDays(category).toString()
+                                },
+                                label = { Text(preset.label, maxLines = 1) }
+                            )
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SimpleMenu("Location", location.label, availableLocations.map { it.label }) { label -> location = availableLocations.first { it.label == label } }
+                        SimpleMenu("Category", category.label, FoodCategory.entries.map { it.label }) { label ->
+                            category = FoodCategory.fromLabel(label)
+                            reminderDays = FreshnessCalculator.defaultReminderDays(category).toString()
+                        }
+                    }
+                    if (!subscriptionState.isPlus) {
+                        Text("Free uses Main Fridge and standard reminder timing.", style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = onOpenPlus) { Text("View Plus organization") }
+                    }
                 }
             }
-            if (!subscriptionState.isPlus) {
-                Text("Free uses Main Fridge and standard reminder timing.")
-                TextButton(onClick = onOpenPlus) { Text("View Plus organization") }
+        }
+        item {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Date reminder", style = MaterialTheme.typography.titleMedium)
+                    DateInput("Expiration date", expirationDate) { expirationDate = it }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                        ExpirationPresetChip("2 days") { expirationDate = LocalDate.now().plusDays(2).toString() }
+                        ExpirationPresetChip("3 days") { expirationDate = LocalDate.now().plusDays(3).toString() }
+                        ExpirationPresetChip("1 week") { expirationDate = LocalDate.now().plusDays(7).toString() }
+                        ExpirationPresetChip("1 month") { expirationDate = LocalDate.now().plusMonths(1).toString() }
+                        ExpirationPresetChip("3 months") { expirationDate = LocalDate.now().plusMonths(3).toString() }
+                        ExpirationPresetChip("6 months") { expirationDate = LocalDate.now().plusMonths(6).toString() }
+                    }
+                    Text("Dates are reminders, not safety guarantees. Check before eating.", style = MaterialTheme.typography.bodySmall)
+                }
             }
-            OutlinedTextField(quantity, { quantity = it }, label = { Text("Quantity") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(unit, { unit = it }, label = { Text("Unit") }, modifier = Modifier.fillMaxWidth())
-            DateInput("Purchase date", purchaseDate) { purchaseDate = it }
-            DateInput("Opened date", openedDate) { openedDate = it }
-            DateInput("Expiration date", expirationDate) { expirationDate = it }
-            if (subscriptionState.isPlus) {
-                OutlinedTextField(reminderDays, { reminderDays = it }, label = { Text("Reminder days before expiration") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+        }
+        item {
+            OutlinedButton(onClick = { showDetails = !showDetails }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (showDetails) "Hide details" else "Add quantity, opened date, photo, notes")
             }
-            OutlinedTextField(barcode, { barcode = it }, label = { Text("Barcode") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(imageUri, { imageUri = it }, label = { Text("Product image URL") }, modifier = Modifier.fillMaxWidth())
-            imageUri.takeIf { it.isNotBlank() }?.let {
-                AsyncImage(
-                    model = it,
-                    contentDescription = "Product image preview",
-                    modifier = Modifier.fillMaxWidth().height(160.dp),
-                    contentScale = ContentScale.Fit
-                )
+        }
+        if (showDetails) {
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Details", style = MaterialTheme.typography.titleMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(quantity, { quantity = it }, label = { Text("Quantity") }, modifier = Modifier.weight(1f), singleLine = true)
+                            OutlinedTextField(unit, { unit = it }, label = { Text("Unit") }, modifier = Modifier.weight(1f), singleLine = true)
+                        }
+                        DateInput("Purchase date", purchaseDate) { purchaseDate = it }
+                        DateInput("Opened date", openedDate) { openedDate = it }
+                        if (subscriptionState.isPlus) {
+                            OutlinedTextField(reminderDays, { reminderDays = it }, label = { Text("Reminder days before expiration") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        }
+                        OutlinedTextField(barcode, { barcode = it }, label = { Text("Barcode") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(imageUri, { imageUri = it }, label = { Text("Product image URL") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(notes, { notes = it }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth(), minLines = 3)
+                        OutlinedButton(onClick = { photoPicker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (imageUri.isBlank()) "Attach photo" else "Change photo")
+                        }
+                    }
+                }
             }
-            OutlinedTextField(notes, { notes = it }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth(), minLines = 3)
-            OutlinedButton(onClick = { photoPicker.launch("image/*") }) { Text(if (imageUri.isBlank()) "Attach photo" else "Photo attached") }
+        }
+        item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
                     val parsedExpiration = parseDate(expirationDate)
@@ -859,11 +1144,36 @@ private fun FoodEditorScreen(
                             barcode = barcode.takeIf { it.isNotBlank() }
                         )
                     )
-                }) { Text("Save") }
-                OutlinedButton(onClick = onCancel) { Text("Cancel") }
+                }, modifier = Modifier.weight(1f)) { Text("Save food") }
+                OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text("Cancel") }
             }
         }
     }
+}
+
+@Composable
+private fun AddFoodHeroCard(subscriptionState: FridgeFinishSubscriptionState) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Add food fast", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                PlusStatusChip(subscriptionState)
+            }
+            Text("Start with name and expiration date. Details can wait.", color = MaterialTheme.colorScheme.onPrimaryContainer)
+        }
+    }
+}
+
+@Composable
+private fun ExpirationPresetChip(label: String, onClick: () -> Unit) {
+    AssistChip(onClick = onClick, label = { Text(label) })
 }
 
 @Composable
@@ -884,30 +1194,91 @@ private fun RestockScreen(
     }
     var name by rememberSaveable { mutableStateOf("") }
     var quantity by rememberSaveable { mutableStateOf("") }
+    val openItems = uiState.restock.filterNot { it.isPurchased }
+    val purchasedItems = uiState.restock.filter { it.isPurchased }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
-            Text("Shopping / Restock list", style = MaterialTheme.typography.titleLarge)
-            OutlinedTextField(name, { name = it }, label = { Text("Item name") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(quantity, { quantity = it }, label = { Text("Quantity") }, modifier = Modifier.fillMaxWidth())
-            Button(onClick = {
-                if (name.isNotBlank()) {
-                    onSave(RestockItemEntity(name = name.trim(), quantity = quantity.takeIf { it.isNotBlank() }))
-                    name = ""
-                    quantity = ""
-                }
-            }) { Text("Add manually") }
+            ShopHeroCard(openItems.size, purchasedItems.size)
         }
-        items(uiState.restock, key = { it.id }) { item ->
+        item {
             Card(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = item.isPurchased, onCheckedChange = { onToggle(item) })
-                    Column(Modifier.weight(1f)) {
-                        Text(item.name, style = MaterialTheme.typography.titleMedium)
-                        Text(item.quantity.orEmpty())
-                    }
-                    IconButton(onClick = { onDelete(item) }) { Icon(Icons.Default.Delete, contentDescription = "Delete") }
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Add to shop", style = MaterialTheme.typography.titleMedium)
+                    OutlinedTextField(name, { name = it }, label = { Text("Item name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    OutlinedTextField(quantity, { quantity = it }, label = { Text("Quantity or note") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    Button(onClick = {
+                        if (name.isNotBlank()) {
+                            onSave(RestockItemEntity(name = name.trim(), quantity = quantity.takeIf { it.isNotBlank() }))
+                            name = ""
+                            quantity = ""
+                        }
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Add item") }
                 }
             }
+        }
+        item {
+            SectionHeader("Need to buy", openItems.size)
+            if (openItems.isEmpty()) EmptySectionCard("Restock")
+        }
+        items(openItems, key = { "open-${it.id}" }) { item ->
+            RestockCard(item, onToggle, onDelete)
+        }
+        if (purchasedItems.isNotEmpty()) {
+            item { SectionHeader("Purchased", purchasedItems.size) }
+            items(purchasedItems, key = { "done-${it.id}" }) { item ->
+                RestockCard(item, onToggle, onDelete)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShopHeroCard(openCount: Int, purchasedCount: Int) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Smart shop list", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Icon(Icons.Default.ShoppingCart, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+            Text(
+                "$openCount item${if (openCount == 1) "" else "s"} to buy",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Text(
+                if (purchasedCount > 0) "$purchasedCount marked purchased. Recipe missing items can land here." else "Add items manually or from almost-ready recipes.",
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+    }
+}
+
+@Composable
+private fun RestockCard(
+    item: RestockItemEntity,
+    onToggle: (RestockItemEntity) -> Unit,
+    onDelete: (RestockItemEntity) -> Unit
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = item.isPurchased, onCheckedChange = { onToggle(item) })
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(item.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                item.quantity?.takeIf { it.isNotBlank() }?.let {
+                    Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                item.category?.let {
+                    AssistChip(onClick = {}, label = { Text(it.label) })
+                }
+            }
+            IconButton(onClick = { onDelete(item) }) { Icon(Icons.Default.Delete, contentDescription = "Delete") }
         }
     }
 }
@@ -922,11 +1293,21 @@ private fun SettingsScreen(
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item {
-            Text("Settings / About", style = MaterialTheme.typography.titleLarge)
-            Text("Fridge Finish stores your food list on this device. No account is required, and there is no cloud sync.")
-            SettingsCard("Fridge Finish Plus") {
-                Text("Current plan: ${subscriptionState.planLabel}")
-                Text("Free slots used: ${subscriptionState.activeItemCount}/${FridgeFinishSubscriptionState.FREE_ITEM_LIMIT}")
+            SettingsHeroCard(subscriptionState)
+        }
+        item {
+            SettingsCard("Plan") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(subscriptionState.planLabel, style = MaterialTheme.typography.titleLarge)
+                        Text("Items tracked: ${subscriptionState.activeItemCount}/${FridgeFinishSubscriptionState.FREE_ITEM_LIMIT}")
+                    }
+                    PlusStatusChip(subscriptionState)
+                }
                 if (subscriptionState.hasAdminAccess) {
                     Text("Admin build access is on. Plus features are unlocked for testing.")
                 }
@@ -935,19 +1316,72 @@ private fun SettingsScreen(
                 }
                 subscriptionState.billingMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onOpenPlus) { Text("View Plus") }
-                    OutlinedButton(onClick = onRestorePurchases) { Text("Restore") }
+                    Button(onClick = onOpenPlus, modifier = Modifier.weight(1f)) { Text("View Plus") }
+                    OutlinedButton(onClick = onRestorePurchases, modifier = Modifier.weight(1f)) { Text("Restore") }
                 }
             }
-            Text("Notifications are local reminders before food dates arrive. If notifications are disabled, reminders will not appear.")
+        }
+        item {
+            SettingsCard("Local-first") {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.PrivacyTip, contentDescription = null)
+                    Text("Your food list is stored on this device. No account is required, and there is no cloud sync.")
+                }
+            }
+        }
+        item {
+            SettingsCard("Notifications") {
+                Text("Local reminders can warn you before food dates arrive. If notifications are disabled, reminders will not appear.")
             Button(onClick = {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
-            }) { Text("Ask for notification permission") }
-            OutlinedButton(onClick = onAddSamples) { Text("Add sample data") }
-            Text("Fridge Finish helps you organize food dates and reminders. It does not determine whether food is safe to eat.")
-            Text("Use your judgment and check before eating, especially when something is past date.")
+                }, modifier = Modifier.fillMaxWidth()) { Text("Ask for notification permission") }
+            }
+        }
+        item {
+            SettingsCard("Testing") {
+                Text("Sample data helps check dashboard, recipes, storage, and shopping flows.")
+                OutlinedButton(onClick = onAddSamples, modifier = Modifier.fillMaxWidth()) { Text("Add sample data") }
+            }
+        }
+        item {
+            SettingsCard("Food date note") {
+                Text("Fridge Finish helps you organize food dates and reminders. It does not determine whether food is safe to eat.")
+                Text("Use your judgment and check before eating, especially when something is past date.")
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsHeroCard(subscriptionState: FridgeFinishSubscriptionState) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Info", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+            Text(
+                "${subscriptionState.planLabel} is active",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Text(
+                if (subscriptionState.isPlus) {
+                    "Premium tools are unlocked for storage, recipes, and smart shopping."
+                } else {
+                    "Basic fridge tracking is free. Plus unlocks deeper organization."
+                },
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
         }
     }
 }
@@ -996,14 +1430,20 @@ private fun FridgeFinishPlusScreen(
 ) {
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("Fridge Finish Plus", style = MaterialTheme.typography.titleLarge)
-            Text("A fair upgrade for deeper organization and planning. Basic fridge tracking stays free.")
+            PlusHeroCard(subscriptionState)
         }
         item {
-            PlanCard("Free", FridgeFinishPlans.freeBenefits)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                PlusFeatureTile("Storage", "More places", Modifier.weight(1f))
+                PlusFeatureTile("Recipes", "Use food first", Modifier.weight(1f))
+                PlusFeatureTile("Shop", "Smarter list", Modifier.weight(1f))
+            }
         }
         item {
-            PlanCard("Plus", FridgeFinishPlans.plusBenefits)
+            PlanCard("Free", FridgeFinishPlans.freeBenefits, highlighted = false)
+        }
+        item {
+            PlanCard("Plus", FridgeFinishPlans.plusBenefits, highlighted = true)
         }
         item {
             SettingsCard("Billing status") {
@@ -1026,6 +1466,44 @@ private fun FridgeFinishPlusScreen(
     }
 }
 
+@Composable
+private fun PlusHeroCard(subscriptionState: FridgeFinishSubscriptionState) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Fridge Finish Plus", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Icon(Icons.Default.Star, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+            Text(
+                if (subscriptionState.isPlus) "Plus is active" else "Upgrade from tracking to finishing",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Text(
+                "Multiple storage locations, recipe ideas, smart shopping, and deeper planning without ads or accounts.",
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlusFeatureTile(title: String, body: String, modifier: Modifier = Modifier) {
+    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(body, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
 private val FridgeFinishSubscriptionState.planLabel: String
     get() = when {
         hasAdminAccess -> "Admin Plus"
@@ -1034,10 +1512,32 @@ private val FridgeFinishSubscriptionState.planLabel: String
     }
 
 @Composable
-private fun PlanCard(title: String, benefits: List<String>) {
-    SettingsCard(title) {
+private fun PlanCard(title: String, benefits: List<String>, highlighted: Boolean) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (highlighted) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                if (highlighted) AssistChip(onClick = {}, label = { Text("Best") })
+            }
         benefits.forEach { benefit ->
-            Text("- $benefit")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                    Icon(
+                        if (highlighted) Icons.Default.Star else Icons.Default.Lock,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(benefit, modifier = Modifier.weight(1f))
+                }
+            }
         }
     }
 }
@@ -1090,7 +1590,7 @@ private fun DateInput(label: String, value: String, onValueChange: (String) -> U
             OutlinedButton(
                 onClick = {
                     showLiveScanner = !showLiveScanner
-                    scanMessage = if (!showLiveScanner) "Hold the printed date inside the camera view." else null
+                    scanMessage = if (!showLiveScanner) "Fill the camera with the printed date only." else null
                     scannedText = ""
                     detectedDates = emptyList()
                 }
@@ -1106,17 +1606,25 @@ private fun DateInput(label: String, value: String, onValueChange: (String) -> U
                     detectedDates = candidates.map { it.toString() }
                     if (detectedDates.isNotEmpty()) {
                         onValueChange(detectedDates.first())
-                        scanMessage = "Found ${detectedDates.first()}. Check it before saving."
+                        scanMessage = "Found ${detectedDates.first()}. Tap another option below if needed."
                     } else if (scannedText.isNotBlank()) {
-                        scanMessage = "Reading text, but no date matched yet."
+                        scanMessage = "Reading text, but no date matched yet. Move closer and reduce background text."
                     }
                 },
                 onClose = { showLiveScanner = false }
             )
         }
-        scanMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        scanMessage?.let {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Text(it, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+            }
+        }
         if (detectedDates.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Detected dates", style = MaterialTheme.typography.labelLarge)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
                 detectedDates.take(3).forEach { candidate ->
                     AssistChip(
                         onClick = { onValueChange(candidate) },
@@ -1178,7 +1686,15 @@ private fun DateOcrLiveScanner(
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Hold only the printed date in view. Avoid the nutrition label.", style = MaterialTheme.typography.bodySmall)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Scan the printed date", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text("Move close, keep it well lit, and avoid the nutrition label or long ingredient text.", color = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+        }
         if (hasPermission) {
             LiveDateCamera(onResult)
         } else {

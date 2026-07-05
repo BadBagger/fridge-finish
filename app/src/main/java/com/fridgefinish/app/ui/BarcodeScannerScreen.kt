@@ -18,10 +18,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -30,13 +39,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.fridgefinish.app.data.BarcodeProduct
+import coil.compose.AsyncImage
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -60,17 +73,22 @@ fun BarcodeScannerScreen(
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         hasPermission = it
     }
+    var lastDetectedBarcode by remember { mutableStateOf("") }
+    var manualBarcode by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         if (!hasPermission) permissionLauncher.launch(Manifest.permission.CAMERA)
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Scan barcode", style = MaterialTheme.typography.titleLarge)
-        Text("This can identify the product, but you still need to check the package date.")
+        ScanHeroCard(lookupState)
 
         if (hasPermission) {
-            BarcodeCameraPreview(onBarcodeScanned)
+            BarcodeCameraPreview { barcode ->
+                lastDetectedBarcode = barcode
+                manualBarcode = barcode
+                onBarcodeScanned(barcode)
+            }
         } else {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -82,16 +100,41 @@ fun BarcodeScannerScreen(
             }
         }
 
+        if (lastDetectedBarcode.isNotBlank()) {
+            AssistChip(onClick = {}, label = { Text("Detected $lastDetectedBarcode") })
+        }
+
         when (lookupState) {
-            BarcodeLookupState.Idle -> Text("Point the camera at a UPC or EAN barcode.")
-            is BarcodeLookupState.Loading -> Text("Looking up ${lookupState.barcode}...")
+            BarcodeLookupState.Idle -> ScanTipCard()
+            is BarcodeLookupState.Loading -> {
+                Card(Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Search, contentDescription = null)
+                        Text("Looking up ${lookupState.barcode}...")
+                    }
+                }
+            }
             is BarcodeLookupState.Found -> {
                 Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Product found", style = MaterialTheme.typography.titleMedium)
-                        Text(lookupState.product.name)
-                        Text("Category guess: ${lookupState.product.category.label}")
-                        Button(onClick = { onUseProduct(lookupState.product) }) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            lookupState.product.imageUrl?.takeIf { it.isNotBlank() }?.let {
+                                AsyncImage(
+                                    model = it,
+                                    contentDescription = lookupState.product.name,
+                                    modifier = Modifier.size(76.dp),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text(lookupState.product.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text("Category guess: ${lookupState.product.category.label}")
+                                Text("Barcode: ${lookupState.product.barcode}", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        Text("Next: check the printed date, then save the item.", style = MaterialTheme.typography.bodySmall)
+                        Button(onClick = { onUseProduct(lookupState.product) }, modifier = Modifier.fillMaxWidth()) {
                             Text("Review and add")
                         }
                     }
@@ -102,7 +145,7 @@ fun BarcodeScannerScreen(
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("No product match found.")
                         Text("You can still add it manually with this barcode saved.")
-                        Button(onClick = { onUseBarcodeManually(lookupState.barcode) }) {
+                        Button(onClick = { onUseBarcodeManually(lookupState.barcode) }, modifier = Modifier.fillMaxWidth()) {
                             Text("Add manually")
                         }
                     }
@@ -110,8 +153,70 @@ fun BarcodeScannerScreen(
             }
         }
 
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Manual fallback", style = MaterialTheme.typography.titleMedium)
+                OutlinedTextField(
+                    value = manualBarcode,
+                    onValueChange = { manualBarcode = it.filter(Char::isDigit) },
+                    label = { Text("Barcode number") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = { if (manualBarcode.isNotBlank()) onBarcodeScanned(manualBarcode) }, modifier = Modifier.weight(1f)) {
+                        Text("Look up")
+                    }
+                    OutlinedButton(onClick = { if (manualBarcode.isNotBlank()) onUseBarcodeManually(manualBarcode) }, modifier = Modifier.weight(1f)) {
+                        Text("Add")
+                    }
+                }
+            }
+        }
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onCancel) { Text("Cancel") }
+            OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
+        }
+    }
+}
+
+@Composable
+private fun ScanHeroCard(lookupState: BarcodeLookupState) {
+    val title = when (lookupState) {
+        BarcodeLookupState.Idle -> "Find product fast"
+        is BarcodeLookupState.Loading -> "Looking up barcode"
+        is BarcodeLookupState.Found -> "Ready to review"
+        is BarcodeLookupState.NotFound -> "No match found"
+    }
+    val body = when (lookupState) {
+        BarcodeLookupState.Idle -> "Center the UPC/EAN barcode. Product info can fill the name and image."
+        is BarcodeLookupState.Loading -> "Hold steady while Fridge Finish checks the product database."
+        is BarcodeLookupState.Found -> "Product details are filled. You still choose the date before saving."
+        is BarcodeLookupState.NotFound -> "Use the barcode anyway and add the product name yourself."
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.CameraAlt, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text(body, color = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScanTipCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Warning, contentDescription = null)
+            Text("Barcode scanning identifies the product, not the expiration date. Scan the date on the food form after review.")
         }
     }
 }
