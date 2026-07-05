@@ -35,7 +35,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -80,7 +79,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
@@ -1864,59 +1862,31 @@ private fun enhanceForDotMatrixText(source: Bitmap): Bitmap {
 
 @Composable
 private fun FridgeFinishTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
     MaterialTheme(
-        colorScheme = if (dark) {
-            darkColorScheme(
-                primary = Color(0xFF8FD8C7),
-                onPrimary = Color(0xFF06201A),
-                primaryContainer = Color(0xFF173F36),
-                onPrimaryContainer = Color(0xFFE8FFF7),
-                secondary = Color(0xFFE1C477),
-                onSecondary = Color(0xFF261B00),
-                secondaryContainer = Color(0xFF4A3A12),
-                onSecondaryContainer = Color(0xFFFFF1C2),
-                tertiary = Color(0xFFB7C7FF),
-                onTertiary = Color(0xFF101A38),
-                tertiaryContainer = Color(0xFF2A3353),
-                onTertiaryContainer = Color(0xFFE7ECFF),
-                background = Color(0xFF101314),
-                onBackground = Color(0xFFE7ECEA),
-                surface = Color(0xFF171B1C),
-                onSurface = Color(0xFFE7ECEA),
-                surfaceVariant = Color(0xFF242A2B),
-                onSurfaceVariant = Color(0xFFC3CCCA),
-                error = Color(0xFFFFB4AB),
-                onError = Color(0xFF690005),
-                errorContainer = Color(0xFF4A1717),
-                onErrorContainer = Color(0xFFFFDAD6)
-            )
-        } else {
-            lightColorScheme(
-                primary = Color(0xFF245C4F),
-                onPrimary = Color.White,
-                primaryContainer = Color(0xFFD8F4EC),
-                onPrimaryContainer = Color(0xFF06201A),
-                secondary = Color(0xFF8A5A16),
-                onSecondary = Color.White,
-                secondaryContainer = Color(0xFFFFE4A8),
-                onSecondaryContainer = Color(0xFF291800),
-                tertiary = Color(0xFF405F91),
-                onTertiary = Color.White,
-                tertiaryContainer = Color(0xFFDCE5FF),
-                onTertiaryContainer = Color(0xFF071A3A),
-                background = Color(0xFFFBFDFB),
-                onBackground = Color(0xFF191C1B),
-                surface = Color(0xFFFFFFFF),
-                onSurface = Color(0xFF191C1B),
-                surfaceVariant = Color(0xFFE8EEEB),
-                onSurfaceVariant = Color(0xFF444C49),
-                error = Color(0xFFBA1A1A),
-                onError = Color.White,
-                errorContainer = Color(0xFFFFDAD6),
-                onErrorContainer = Color(0xFF410002)
-            )
-        },
+        colorScheme = lightColorScheme(
+            primary = Color(0xFF149A66),
+            onPrimary = Color.White,
+            primaryContainer = Color(0xFFDDF8EA),
+            onPrimaryContainer = Color(0xFF083D2A),
+            secondary = Color(0xFF6FBF45),
+            onSecondary = Color.White,
+            secondaryContainer = Color(0xFFE8F7D8),
+            onSecondaryContainer = Color(0xFF21390B),
+            tertiary = Color(0xFF4A8F78),
+            onTertiary = Color.White,
+            tertiaryContainer = Color(0xFFD9F1E8),
+            onTertiaryContainer = Color(0xFF0A3528),
+            background = Color(0xFFFCFFFD),
+            onBackground = Color(0xFF17211C),
+            surface = Color(0xFFFFFFFF),
+            onSurface = Color(0xFF17211C),
+            surfaceVariant = Color(0xFFF0F7F2),
+            onSurfaceVariant = Color(0xFF4D5B53),
+            error = Color(0xFFB3261E),
+            onError = Color.White,
+            errorContainer = Color(0xFFFFE1DD),
+            onErrorContainer = Color(0xFF410E0B)
+        ),
         content = content
     )
 }
