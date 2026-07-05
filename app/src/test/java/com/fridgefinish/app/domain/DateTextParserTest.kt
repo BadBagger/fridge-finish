@@ -54,4 +54,36 @@ class DateTextParserTest {
             DateTextParser.extractDate("BB 09DEC2025 10:43 B", today)
         )
     }
+
+    @Test
+    fun prefersExpirationDateBeforeLotCode() {
+        assertEquals(
+            LocalDate.of(2026, 8, 16),
+            DateTextParser.extractDate("LOT 070126 EXP 08/16/26", today)
+        )
+    }
+
+    @Test
+    fun parsesCompactYearMonthDayAfterExp() {
+        assertEquals(
+            LocalDate.of(2026, 8, 16),
+            DateTextParser.extractDate("EXP 260816 L4", today)
+        )
+    }
+
+    @Test
+    fun parsesAttachedMonthDayYear() {
+        assertEquals(
+            LocalDate.of(2025, 12, 9),
+            DateTextParser.extractDate("BEST BY DEC0925", today)
+        )
+    }
+
+    @Test
+    fun parsesBestBeforeAbbreviation() {
+        assertEquals(
+            LocalDate.of(2025, 12, 9),
+            DateTextParser.extractDate("B/B 09 DEC 25", today)
+        )
+    }
 }

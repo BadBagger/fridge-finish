@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Search
@@ -76,6 +78,7 @@ fun BarcodeScannerScreen(
     var lastDetectedBarcode by remember { mutableStateOf("") }
     var manualBarcode by remember { mutableStateOf("") }
     var showCamera by remember { mutableStateOf(true) }
+    var showManualFallback by remember { mutableStateOf(false) }
     val productFound = lookupState is BarcodeLookupState.Found
     val scannerActive = lookupState !is BarcodeLookupState.Loading && lookupState !is BarcodeLookupState.Found
 
@@ -84,10 +87,19 @@ fun BarcodeScannerScreen(
     }
 
     LaunchedEffect(productFound) {
-        if (productFound) showCamera = false
+        if (productFound) {
+            showCamera = false
+            showManualFallback = false
+        }
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         ScanHeroCard(lookupState)
 
         if (hasPermission && showCamera) {
@@ -162,6 +174,9 @@ fun BarcodeScannerScreen(
                         Button(onClick = { onUseProduct(lookupState.product) }, modifier = Modifier.fillMaxWidth()) {
                             Text("Review and add")
                         }
+                        OutlinedButton(onClick = { showManualFallback = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Enter barcode instead")
+                        }
                     }
                 }
             }
@@ -178,27 +193,29 @@ fun BarcodeScannerScreen(
             }
         }
 
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Manual fallback", style = MaterialTheme.typography.titleMedium)
-                OutlinedTextField(
-                    value = manualBarcode,
-                    onValueChange = { manualBarcode = it.filter(Char::isDigit) },
-                    label = { Text("Barcode number") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(onClick = {
-                        if (manualBarcode.isNotBlank()) {
-                            showCamera = false
-                            onBarcodeScanned(manualBarcode)
+        if (!productFound || showManualFallback) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Manual fallback", style = MaterialTheme.typography.titleMedium)
+                    OutlinedTextField(
+                        value = manualBarcode,
+                        onValueChange = { manualBarcode = it.filter(Char::isDigit) },
+                        label = { Text("Barcode number") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(onClick = {
+                            if (manualBarcode.isNotBlank()) {
+                                showCamera = false
+                                onBarcodeScanned(manualBarcode)
+                            }
+                        }, modifier = Modifier.weight(1f)) {
+                            Text("Look up")
                         }
-                    }, modifier = Modifier.weight(1f)) {
-                        Text("Look up")
-                    }
-                    OutlinedButton(onClick = { if (manualBarcode.isNotBlank()) onUseBarcodeManually(manualBarcode) }, modifier = Modifier.weight(1f)) {
-                        Text("Add")
+                        OutlinedButton(onClick = { if (manualBarcode.isNotBlank()) onUseBarcodeManually(manualBarcode) }, modifier = Modifier.weight(1f)) {
+                            Text("Add")
+                        }
                     }
                 }
             }
@@ -219,7 +236,7 @@ private fun ScanHeroCard(lookupState: BarcodeLookupState) {
         is BarcodeLookupState.NotFound -> "No match found"
     }
     val body = when (lookupState) {
-        BarcodeLookupState.Idle -> "Center the UPC/EAN barcode. Product info can fill the name and image."
+        BarcodeLookupState.Idle -> "Center the UPC/EAN barcode to fill product details."
         is BarcodeLookupState.Loading -> "Hold steady while Fridge Finish checks the product database."
         is BarcodeLookupState.Found -> "Product details are filled. You still choose the date before saving."
         is BarcodeLookupState.NotFound -> "Use the barcode anyway and add the product name yourself."
@@ -263,9 +280,11 @@ private fun BarcodeCameraPreview(onBarcodeScanned: (String) -> Unit) {
     }
 
     AndroidView(
-        modifier = Modifier.fillMaxWidth().height(320.dp),
+        modifier = Modifier.fillMaxWidth().height(280.dp),
         factory = { viewContext ->
-            val previewView = PreviewView(viewContext)
+            val previewView = PreviewView(viewContext).apply {
+                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            }
             val providerFuture = ProcessCameraProvider.getInstance(viewContext)
             providerFuture.addListener(
                 {

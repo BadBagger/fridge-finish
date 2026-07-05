@@ -1759,7 +1759,9 @@ private fun LiveDateCamera(onResult: (rawText: String, candidates: List<LocalDat
     AndroidView(
         modifier = Modifier.fillMaxWidth().height(220.dp),
         factory = { viewContext ->
-            val previewView = PreviewView(viewContext)
+            val previewView = PreviewView(viewContext).apply {
+                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            }
             val providerFuture = ProcessCameraProvider.getInstance(viewContext)
             providerFuture.addListener(
                 {
