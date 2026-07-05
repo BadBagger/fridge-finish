@@ -213,7 +213,9 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text("Fridge Finish")
-                                PlusStatusChip(uiState.subscription)
+                                if (screen !in storageScreens) {
+                                    PlusStatusChip(uiState.subscription)
+                                }
                             }
                         }
                     }
@@ -507,34 +509,28 @@ private fun SectionHeader(title: String, count: Int) {
 
 @Composable
 private fun EmptySectionCard(title: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Text(
-            when (title) {
-                "Eat first" -> "No urgent food right now."
-                "Expires today" -> "Nothing expires today."
-                "Coming up" -> "Add more dates to see what is coming up."
-                else -> "No items here."
-            },
-            modifier = Modifier.padding(14.dp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
+    Text(
+        when (title) {
+            "Eat first" -> "No urgent food right now."
+            "Expires today" -> "Nothing expires today."
+            "Coming up" -> "Add more dates to see what is coming up."
+            else -> "No items here."
+        },
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }
 
 @Composable
 private fun CountCard(label: String, count: Int, status: FreshnessStatus, modifier: Modifier = Modifier) {
-    val container = when (status) {
-        FreshnessStatus.EXPIRED -> MaterialTheme.colorScheme.errorContainer
-        FreshnessStatus.EXPIRES_TODAY -> Color(0xFFFFE1A8)
-        FreshnessStatus.EAT_SOON -> Color(0xFFD8EAD2)
-        else -> MaterialTheme.colorScheme.secondaryContainer
+    val countColor = when (status) {
+        FreshnessStatus.EXPIRED -> MaterialTheme.colorScheme.error
+        FreshnessStatus.EXPIRES_TODAY -> MaterialTheme.colorScheme.secondary
+        FreshnessStatus.EAT_SOON -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurface
     }
-    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = container)) {
+    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(count.toString(), style = MaterialTheme.typography.headlineMedium)
+            Text(count.toString(), style = MaterialTheme.typography.headlineMedium, color = countColor)
             Text(label, style = MaterialTheme.typography.labelMedium)
         }
     }
@@ -577,7 +573,7 @@ private fun FoodListScreen(
                 PlusStatusChip(uiState.subscription)
             }
             if (uiState.subscription.isPlus) {
-                PlusAccessCard(uiState.subscription)
+                StorageAccessRow(uiState.subscription)
             }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -597,11 +593,6 @@ private fun FoodListScreen(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                        },
-                        leadingIcon = if (!locked && option != FoodLocation.FRIDGE && uiState.subscription.isPlus) {
-                            { Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                        } else {
-                            null
                         },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -659,23 +650,22 @@ private fun PlusStatusChip(subscriptionState: FridgeFinishSubscriptionState) {
 }
 
 @Composable
-private fun PlusAccessCard(subscriptionState: FridgeFinishSubscriptionState) {
-    Card(
+private fun StorageAccessRow(subscriptionState: FridgeFinishSubscriptionState) {
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                if (subscriptionState.hasAdminAccess) "Admin Plus is active" else "Fridge Finish Plus is active",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-            Text(
-                "Multiple storage locations, recipes, and smart shopping tools are unlocked.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-        }
+        Text(
+            if (subscriptionState.hasAdminAccess) "Admin Plus active" else "Plus active",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            "All storage locations unlocked",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -972,8 +962,8 @@ private fun String.hasAny(vararg terms: String): Boolean =
 private fun StatusChip(status: FreshnessStatus) {
     val color = when (status) {
         FreshnessStatus.EXPIRED -> MaterialTheme.colorScheme.errorContainer
-        FreshnessStatus.EXPIRES_TODAY -> Color(0xFFFFE1A8)
-        FreshnessStatus.EAT_SOON -> Color(0xFFD8EAD2)
+        FreshnessStatus.EXPIRES_TODAY -> MaterialTheme.colorScheme.secondaryContainer
+        FreshnessStatus.EAT_SOON -> MaterialTheme.colorScheme.primaryContainer
         FreshnessStatus.FRESH -> MaterialTheme.colorScheme.surfaceVariant
         FreshnessStatus.FINISHED -> MaterialTheme.colorScheme.tertiaryContainer
     }
@@ -1878,15 +1868,53 @@ private fun FridgeFinishTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = if (dark) {
             darkColorScheme(
-                primary = Color(0xFF9BD8C5),
-                secondary = Color(0xFFF2C879),
-                tertiary = Color(0xFFAFCBFF)
+                primary = Color(0xFF8FD8C7),
+                onPrimary = Color(0xFF06201A),
+                primaryContainer = Color(0xFF173F36),
+                onPrimaryContainer = Color(0xFFE8FFF7),
+                secondary = Color(0xFFE1C477),
+                onSecondary = Color(0xFF261B00),
+                secondaryContainer = Color(0xFF4A3A12),
+                onSecondaryContainer = Color(0xFFFFF1C2),
+                tertiary = Color(0xFFB7C7FF),
+                onTertiary = Color(0xFF101A38),
+                tertiaryContainer = Color(0xFF2A3353),
+                onTertiaryContainer = Color(0xFFE7ECFF),
+                background = Color(0xFF101314),
+                onBackground = Color(0xFFE7ECEA),
+                surface = Color(0xFF171B1C),
+                onSurface = Color(0xFFE7ECEA),
+                surfaceVariant = Color(0xFF242A2B),
+                onSurfaceVariant = Color(0xFFC3CCCA),
+                error = Color(0xFFFFB4AB),
+                onError = Color(0xFF690005),
+                errorContainer = Color(0xFF4A1717),
+                onErrorContainer = Color(0xFFFFDAD6)
             )
         } else {
             lightColorScheme(
                 primary = Color(0xFF245C4F),
+                onPrimary = Color.White,
+                primaryContainer = Color(0xFFD8F4EC),
+                onPrimaryContainer = Color(0xFF06201A),
                 secondary = Color(0xFF8A5A16),
-                tertiary = Color(0xFF405F91)
+                onSecondary = Color.White,
+                secondaryContainer = Color(0xFFFFE4A8),
+                onSecondaryContainer = Color(0xFF291800),
+                tertiary = Color(0xFF405F91),
+                onTertiary = Color.White,
+                tertiaryContainer = Color(0xFFDCE5FF),
+                onTertiaryContainer = Color(0xFF071A3A),
+                background = Color(0xFFFBFDFB),
+                onBackground = Color(0xFF191C1B),
+                surface = Color(0xFFFFFFFF),
+                onSurface = Color(0xFF191C1B),
+                surfaceVariant = Color(0xFFE8EEEB),
+                onSurfaceVariant = Color(0xFF444C49),
+                error = Color(0xFFBA1A1A),
+                onError = Color.White,
+                errorContainer = Color(0xFFFFDAD6),
+                onErrorContainer = Color(0xFF410002)
             )
         },
         content = content
