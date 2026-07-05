@@ -20,9 +20,10 @@ enum class PlusFeature {
 data class FridgeFinishSubscriptionState(
     val tier: SubscriptionTier = SubscriptionTier.Free,
     val activeItemCount: Int = 0,
-    val billingMessage: String? = null
+    val billingMessage: String? = null,
+    val hasAdminAccess: Boolean = false
 ) {
-    val isPlus: Boolean = tier == SubscriptionTier.Plus
+    val isPlus: Boolean = tier == SubscriptionTier.Plus || hasAdminAccess
     val freeSlotsRemaining: Int = (FREE_ITEM_LIMIT - activeItemCount).coerceAtLeast(0)
 
     companion object {

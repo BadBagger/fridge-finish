@@ -801,8 +801,11 @@ private fun SettingsScreen(
             Text("Settings / About", style = MaterialTheme.typography.titleLarge)
             Text("Fridge Finish stores your food list on this device. No account is required, and there is no cloud sync.")
             SettingsCard("Fridge Finish Plus") {
-                Text("Current plan: ${if (subscriptionState.isPlus) "Plus" else "Free"}")
+                Text("Current plan: ${subscriptionState.planLabel}")
                 Text("Free slots used: ${subscriptionState.activeItemCount}/${FridgeFinishSubscriptionState.FREE_ITEM_LIMIT}")
+                if (subscriptionState.hasAdminAccess) {
+                    Text("Admin build access is on. Plus features are unlocked for testing.")
+                }
                 if (!subscriptionState.isPlus && subscriptionState.freeSlotsRemaining == 0) {
                     Text("You reached the free item limit. Plus unlocks unlimited items.")
                 }
@@ -880,7 +883,13 @@ private fun FridgeFinishPlusScreen(
         }
         item {
             SettingsCard("Billing status") {
-                Text("Google Play Billing is not connected in this build. The app will not start a real purchase or fake an upgrade until billing is implemented.")
+                Text(
+                    if (subscriptionState.hasAdminAccess) {
+                        "Admin build access is on. Plus features are unlocked for testing. Google Play Billing is still not connected for public purchases."
+                    } else {
+                        "Google Play Billing is not connected in this build. The app will not start a real purchase or fake an upgrade until billing is implemented."
+                    }
+                )
                 subscriptionState.billingMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 Button(onClick = onStartPurchase, modifier = Modifier.fillMaxWidth()) {
                     Text("Check upgrade availability")
@@ -892,6 +901,13 @@ private fun FridgeFinishPlusScreen(
         }
     }
 }
+
+private val FridgeFinishSubscriptionState.planLabel: String
+    get() = when {
+        hasAdminAccess -> "Admin Plus"
+        isPlus -> "Plus"
+        else -> "Free"
+    }
 
 @Composable
 private fun PlanCard(title: String, benefits: List<String>) {

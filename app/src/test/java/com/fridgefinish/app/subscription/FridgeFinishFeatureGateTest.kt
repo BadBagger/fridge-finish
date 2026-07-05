@@ -57,4 +57,29 @@ class FridgeFinishFeatureGateTest {
 
         assertTrue(result is FeatureGateResult.Allowed)
     }
+
+    @Test
+    fun adminAccessAllowsPlusFeatureWithoutPurchase() {
+        val state = FridgeFinishSubscriptionState(
+            tier = SubscriptionTier.Free,
+            hasAdminAccess = true
+        )
+
+        val result = FridgeFinishFeatureGate.gateFeature(PlusFeature.SmartGroceryList, state)
+
+        assertTrue(result is FeatureGateResult.Allowed)
+    }
+
+    @Test
+    fun adminAccessAllowsAddingBeyondFreeLimit() {
+        val state = FridgeFinishSubscriptionState(
+            tier = SubscriptionTier.Free,
+            activeItemCount = 125,
+            hasAdminAccess = true
+        )
+
+        val result = FridgeFinishFeatureGate.gateAddItem(state)
+
+        assertTrue(result is FeatureGateResult.Allowed)
+    }
 }

@@ -1,6 +1,7 @@
 package com.fridgefinish.app.ui
 
 import android.app.Application
+import android.content.pm.ApplicationInfo
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.fridgefinish.app.FridgeFinishApplication
@@ -54,6 +55,7 @@ class FridgeFinishViewModel(application: Application) : AndroidViewModel(applica
     private val repository = (application as FridgeFinishApplication).repository
     private val productLookup = ProductLookupRepository()
     private val billingGateway: BillingGateway = PlaceholderBillingGateway()
+    private val hasAdminAccess = application.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
     private val _barcodeLookup = MutableStateFlow<BarcodeLookupState>(BarcodeLookupState.Idle)
     val barcodeLookup = _barcodeLookup.asStateFlow()
     private val billingMessage = MutableStateFlow<String?>(null)
@@ -76,7 +78,8 @@ class FridgeFinishViewModel(application: Application) : AndroidViewModel(applica
             subscription = FridgeFinishSubscriptionState(
                 tier = billingData.first,
                 activeItemCount = activeItemCount,
-                billingMessage = billingData.second
+                billingMessage = billingData.second,
+                hasAdminAccess = hasAdminAccess
             )
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FridgeFinishUiState())
