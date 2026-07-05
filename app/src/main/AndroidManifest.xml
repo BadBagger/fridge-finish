@@ -5,9 +5,9 @@
     <application
         android:name=".FridgeFinishApplication"
         android:allowBackup="true"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@drawable/app_logo"
         android:label="Fridge Finish"
-        android:roundIcon="@drawable/ic_launcher"
+        android:roundIcon="@drawable/app_logo"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
         <activity
