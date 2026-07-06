@@ -1156,8 +1156,8 @@ private fun RecipeIdeaCard(
 ) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            RecipePreparedVisual(idea, modifier = Modifier.fillMaxWidth())
             Row(verticalAlignment = Alignment.Top) {
+                RecipeVisualBadge(idea)
                 Column(Modifier.weight(1f)) {
                     Text(idea.title, style = MaterialTheme.typography.titleMedium)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1198,6 +1198,27 @@ private fun RecipeIdeaCard(
             Text(idea.sourceName, style = MaterialTheme.typography.bodySmall)
         }
     }
+}
+
+@Composable
+private fun RecipeVisualBadge(idea: RecipeIdea) {
+    val style = idea.visualStyle()
+    Box(
+        modifier = Modifier
+            .size(54.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(style.background)
+            .padding(10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(999.dp))
+                .background(style.items.firstOrNull()?.color ?: MaterialTheme.colorScheme.primary)
+        )
+    }
+    Spacer(Modifier.size(10.dp))
 }
 
 @OptIn(ExperimentalLayoutApi::class)
