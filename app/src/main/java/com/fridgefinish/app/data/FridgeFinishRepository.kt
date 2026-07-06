@@ -119,7 +119,7 @@ class FridgeFinishRepository(
                 minutes = minutes,
                 description = description,
                 steps = steps,
-                sourceName = "Fridge Finish AI recipe database",
+                sourceName = "Fridge Finish recipe library",
                 sourceUrl = null
             ),
             ingredients = ingredientSpecs.map { spec ->

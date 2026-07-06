@@ -810,12 +810,12 @@ private data class RecipeIdea(
     val title: String,
     val minutes: Int,
     val servings: String,
+    val portions: List<String>,
     val have: List<String>,
     val missing: List<String>,
     val urgentCount: Int,
     val note: String,
-    val steps: String,
-    val sourceName: String
+    val steps: String
 )
 
 @Composable
@@ -1000,7 +1000,7 @@ private fun MealPlanCard(ideas: List<RecipeIdea>, onOpenRecipe: (RecipeIdea) -> 
                         }
                     }
                 }
-                Text("For a larger family, use More info to see what to double.", style = MaterialTheme.typography.bodySmall)
+                Text("Use More info for portions and family-size notes.", style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -1053,7 +1053,6 @@ private fun RecipeIdeaCard(
                 Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(18.dp))
                 Text("More info")
             }
-            Text(idea.sourceName, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -1085,7 +1084,11 @@ private fun RecipeInfoDialog(
             ) {
                 Text("${idea.minutes} minutes - ${idea.servings}")
                 Text(idea.note)
-                Text("For a family: double the listed ingredients for 4+ servings, and add an easy side if needed.", style = MaterialTheme.typography.bodySmall)
+                Text("Portions", style = MaterialTheme.typography.labelLarge)
+                idea.portions.forEach { portion ->
+                    Text(portion)
+                }
+                Text("For a family: double the portions for 4+ servings, or add a simple side if you are short on one ingredient.", style = MaterialTheme.typography.bodySmall)
                 Text("Use first", style = MaterialTheme.typography.labelLarge)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     idea.have.take(6).forEach { AssistChip(onClick = {}, label = { Text(it) }) }
@@ -1124,12 +1127,12 @@ private fun buildRecipeIdeas(uiState: FridgeFinishUiState): List<RecipeIdea> {
             recipe.title,
             recipe.minutes,
             recipe.estimatedServings(),
+            recipe.portionGuidance(),
             haveItems.distinct(),
             missing,
             urgent,
             recipe.description,
-            recipe.steps,
-            recipe.sourceName
+            recipe.steps
         )
     }.sortedWith(
         compareBy<RecipeIdea> { it.missing.size }
@@ -1145,6 +1148,56 @@ private fun RecipeEntity.estimatedServings(): String {
         listOf("soup", "pasta", "fried rice", "grain bowl", "salad").any { text.contains(it) } -> "Serves 3-4"
         listOf("omelet", "quesadilla").any { text.contains(it) } -> "Serves 2"
         else -> "Serves 2-3"
+    }
+}
+
+private fun RecipeEntity.portionGuidance(): List<String> {
+    val text = title.lowercase()
+    return when {
+        text.contains("smoothie") -> listOf(
+            "1 serving: about 1 cup milk or yogurt, 1 cup fruit, and 1/2 cup frozen fruit or ice.",
+            "2 servings: double those amounts and blend in batches if needed."
+        )
+        text.contains("yogurt") -> listOf(
+            "1 serving: about 3/4 cup yogurt, 1/2 to 1 cup fruit, and 2 tablespoons granola or nuts.",
+            "2 servings: use about 1 1/2 cups yogurt and split toppings across two bowls."
+        )
+        text.contains("snack") -> listOf(
+            "1 plate: 1 handful fruit or vegetables, 1 small protein or dairy item, and 1 handful crackers or nuts.",
+            "Family plate: make one section per person so everyone can grab what they want."
+        )
+        text.contains("omelet") -> listOf(
+            "1 serving: 2 eggs, 1/4 cup chopped vegetables, and a small handful of cheese if available.",
+            "2 servings: use 4 eggs and cook as one large omelet or two smaller ones."
+        )
+        text.contains("quesadilla") -> listOf(
+            "1 serving: 1 tortilla, 1/3 cup cheese, and 1/4 to 1/2 cup beans, peppers, or leftovers.",
+            "2 servings: make two tortillas or one large quesadilla cut in half."
+        )
+        text.contains("pasta") -> listOf(
+            "2 servings: about 4 ounces dry pasta or 2 cups prepared pasta-style food, plus 1 cup vegetables or leftovers.",
+            "4 servings: double the pasta and add extra sauce or vegetables."
+        )
+        text.contains("soup") -> listOf(
+            "2 servings: about 2 cups broth or water, 1 cup vegetables, and 1 cup beans, grains, or leftovers.",
+            "4 servings: double the liquid first, then add more solids until it looks balanced."
+        )
+        text.contains("fried rice") -> listOf(
+            "2 servings: about 2 cups cooked rice, 1 egg or protein, and 1 cup vegetables.",
+            "4 servings: use 4 cups cooked rice and cook in batches so it does not steam too much."
+        )
+        text.contains("grain bowl") -> listOf(
+            "1 bowl: about 1 cup cooked rice, pasta, or grain, 1/2 cup leftovers, and 1/2 cup vegetables.",
+            "Family bowls: set ingredients out separately and build one bowl per person."
+        )
+        text.contains("salad") -> listOf(
+            "1 serving: 2 cups greens, 1/2 cup protein or leftovers, and 1 to 2 tablespoons dressing.",
+            "Family salad: use a large bowl of greens and keep dressing on the side."
+        )
+        else -> listOf(
+            "1 serving: use one normal portion of each listed item.",
+            "Family size: double the main items for 4+ servings and add a side if needed."
+        )
     }
 }
 
