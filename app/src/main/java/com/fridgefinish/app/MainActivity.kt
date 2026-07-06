@@ -128,6 +128,7 @@ import com.fridgefinish.app.domain.FreshnessStatus
 import com.fridgefinish.app.domain.DateTextParser
 import com.fridgefinish.app.domain.cleanShoppingName
 import com.fridgefinish.app.domain.missingItemsNotAlreadyInShop
+import com.fridgefinish.app.domain.recipeIngredientMatchesFood
 import com.fridgefinish.app.subscription.FeatureGateResult
 import com.fridgefinish.app.subscription.FridgeFinishFeatureGate
 import com.fridgefinish.app.subscription.FridgeFinishPlans
@@ -1190,12 +1191,7 @@ private fun String.inferShoppingCategory(): FoodCategory {
 }
 
 private fun RecipeIngredientEntity.matches(food: FoodItemEntity): Boolean {
-    val keywordMatch = keywords.split(",").any { keyword ->
-        val trimmed = keyword.trim()
-        trimmed.isNotBlank() && food.name.contains(trimmed, ignoreCase = true)
-    }
-    val categoryMatch = category?.let { food.category.name.equals(it, ignoreCase = true) } ?: false
-    return keywordMatch || categoryMatch
+    return recipeIngredientMatchesFood(label, keywords, category, food.name, food.category)
 }
 
 private fun String.hasAny(vararg terms: String): Boolean =
