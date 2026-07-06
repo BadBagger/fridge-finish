@@ -74,6 +74,7 @@ fun BarcodeScannerScreen(
     onUseProduct: (BarcodeProduct) -> Unit,
     onUseBarcodeManually: (String) -> Unit,
     onScanAnother: () -> Unit,
+    onScanReceipt: () -> Unit,
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
@@ -111,6 +112,26 @@ fun BarcodeScannerScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         ScanHeroCard(lookupState)
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Row(
+                Modifier.padding(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.ShoppingCart, contentDescription = null)
+                Column(Modifier.weight(1f)) {
+                    Text("Import a receipt", style = MaterialTheme.typography.titleMedium)
+                    Text("Scan a grocery receipt, review the items, then add selected food to inventory.")
+                }
+                OutlinedButton(onClick = onScanReceipt) {
+                    Text("Scan receipt")
+                }
+            }
+        }
 
         if (hasPermission && showCamera) {
             BarcodeScannerCard(

@@ -126,6 +126,8 @@ import com.fridgefinish.app.domain.FoodLocation
 import com.fridgefinish.app.domain.FreshnessCalculator
 import com.fridgefinish.app.domain.FreshnessStatus
 import com.fridgefinish.app.domain.DateTextParser
+import com.fridgefinish.app.domain.ReceiptImportCandidate
+import com.fridgefinish.app.domain.ReceiptTextParser
 import com.fridgefinish.app.domain.cleanShoppingName
 import com.fridgefinish.app.domain.missingItemsNotAlreadyInShop
 import com.fridgefinish.app.domain.recipeIngredientMatchesFood
@@ -169,7 +171,8 @@ private enum class Screen(val label: String) {
     RESTOCK("Shop"),
     SETTINGS("Info"),
     PLUS("Plus"),
-    SCAN("Scan")
+    SCAN("Scan"),
+    RECEIPT_SCAN("Receipt")
 }
 
 private val storageScreens = listOf(
@@ -241,7 +244,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                 )
             },
             floatingActionButton = {
-                if (editingFood == null && addingFood == null && screen !in listOf(Screen.RESTOCK, Screen.SETTINGS, Screen.PLUS, Screen.SCAN)) {
+                if (editingFood == null && addingFood == null && screen !in listOf(Screen.RESTOCK, Screen.SETTINGS, Screen.PLUS, Screen.SCAN, Screen.RECEIPT_SCAN)) {
                     FloatingActionButton(onClick = { addFoodIfAllowed(viewModel.presetFood(FoodCategory.OTHER)) }) {
                         Icon(Icons.Default.Add, contentDescription = "Add food")
                     }
@@ -407,10 +410,36 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                             viewModel.clearBarcodeLookup()
                         },
                         onScanAnother = viewModel::clearBarcodeLookup,
+                        onScanReceipt = {
+                            viewModel.clearBarcodeLookup()
+                            screen = Screen.RECEIPT_SCAN
+                        },
                         onCancel = {
                             viewModel.clearBarcodeLookup()
                             screen = Screen.TODAY
                         }
+                    )
+                    screen == Screen.RECEIPT_SCAN -> ReceiptImportScreen(
+                        onImport = { candidates ->
+                            candidates.forEach { candidate ->
+                                viewModel.saveFood(
+                                    FoodItemEntity(
+                                        name = candidate.name,
+                                        category = candidate.category,
+                                        location = when (candidate.category) {
+                                            FoodCategory.FROZEN -> FoodLocation.FREEZER
+                                            FoodCategory.PANTRY -> FoodLocation.PANTRY
+                                            else -> FoodLocation.FRIDGE
+                                        },
+                                        expirationDate = candidate.expirationDate,
+                                        reminderDaysBefore = candidate.reminderDaysBefore,
+                                        notes = "Imported from receipt scan. Confirm the date on the package."
+                                    )
+                                )
+                            }
+                            screen = Screen.FRIDGE
+                        },
+                        onCancel = { screen = Screen.SCAN }
                     )
                 }
             }
@@ -1972,6 +2001,298 @@ private fun parseDate(value: String): LocalDate? =
     } catch (_: DateTimeParseException) {
         null
     }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ReceiptImportScreen(
+    onImport: (List<ReceiptImportCandidate>) -> Unit,
+    onCancel: () -> Unit
+) {
+    val context = LocalContext.current
+    var hasPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        hasPermission = it
+    }
+    var rawText by rememberSaveable { mutableStateOf("") }
+    var candidates by remember { mutableStateOf(emptyList<ReceiptImportCandidate>()) }
+    var selectedNames by remember { mutableStateOf(emptySet<String>()) }
+    var scannerPaused by rememberSaveable { mutableStateOf(false) }
+    var importMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            scannerPaused = true
+            importMessage = "Reading receipt photo..."
+            recognizeReceiptFromImage(context, uri) { text, detected ->
+                rawText = text.replace('\n', ' ').trim()
+                candidates = detected
+                selectedNames = detected.map { it.name }.toSet()
+                importMessage = if (detected.isEmpty()) {
+                    "No grocery items found in that photo. Try a clearer screenshot or crop closer to the item list."
+                } else {
+                    "Found ${detected.size} possible item${if (detected.size == 1) "" else "s"} from the photo."
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!hasPermission) permissionLauncher.launch(Manifest.permission.CAMERA)
+    }
+
+    LazyColumn(
+        Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Import receipt", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    Text(
+                        "Scan grocery receipt text or import a digital receipt photo, review the matches, then add selected items to your inventory.",
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        "Receipt dates are not expiration dates. Fridge Finish uses default reminders until you edit each item.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+        }
+
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Scan the item list", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Fill the camera with receipt item rows, or pick a saved receipt screenshot/photo.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Button(onClick = { photoPicker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Pick receipt photo")
+                    }
+                    importMessage?.let {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Text(it, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    if (hasPermission) {
+                        if (scannerPaused) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                Text(
+                                    "Scanner paused. Review the detected items below or scan again.",
+                                    modifier = Modifier.padding(12.dp)
+                                )
+                            }
+                        } else {
+                            ReceiptOcrCamera { text, detected ->
+                                rawText = text.replace('\n', ' ').trim()
+                                if (detected.isNotEmpty()) {
+                                    candidates = detected
+                                    selectedNames = detected.map { it.name }.toSet()
+                                }
+                            }
+                        }
+                    } else {
+                        Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
+                            Text("Allow camera")
+                        }
+                    }
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            scannerPaused = !scannerPaused
+                        }) {
+                            Text(if (scannerPaused) "Scan again" else "Pause scanner")
+                        }
+                        TextButton(onClick = onCancel) { Text("Cancel") }
+                    }
+                    if (rawText.isNotBlank()) {
+                        Text("Read: ${rawText.take(140)}", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+
+        item {
+            SectionHeader("Review items", candidates.size)
+            if (candidates.isEmpty()) {
+                EmptyRecipeCard("No receipt items detected yet. Move closer, improve lighting, or try a flatter receipt.")
+            }
+        }
+
+        items(candidates, key = { it.name }) { candidate ->
+            ReceiptCandidateCard(
+                candidate = candidate,
+                selected = candidate.name in selectedNames,
+                onSelectedChange = { selected ->
+                    selectedNames = if (selected) selectedNames + candidate.name else selectedNames - candidate.name
+                }
+            )
+        }
+
+        if (candidates.isNotEmpty()) {
+            item {
+                val selected = candidates.filter { it.name in selectedNames }
+                Button(
+                    onClick = { onImport(selected) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = selected.isNotEmpty()
+                ) {
+                    Text("Import ${selected.size} item${if (selected.size == 1) "" else "s"}")
+                }
+                Text(
+                    "After import, open any item to adjust location, quantity, or exact expiration date.",
+                    modifier = Modifier.padding(top = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ReceiptCandidateCard(
+    candidate: ReceiptImportCandidate,
+    selected: Boolean,
+    onSelectedChange: (Boolean) -> Unit
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = selected, onCheckedChange = onSelectedChange)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(candidate.name, style = MaterialTheme.typography.titleMedium)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    AssistChip(onClick = {}, label = { Text(candidate.category.label) })
+                    AssistChip(onClick = {}, label = { Text("Default date ${candidate.expirationDate}") })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReceiptOcrCamera(onResult: (rawText: String, candidates: List<ReceiptImportCandidate>) -> Unit) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    var lastScanAt by remember { mutableStateOf(0L) }
+
+    DisposableEffect(Unit) {
+        onDispose { cameraExecutor.shutdown() }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 260.dp, max = 380.dp)
+            .height(320.dp)
+            .clip(RoundedCornerShape(12.dp))
+    ) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { viewContext ->
+                val previewView = PreviewView(viewContext).apply {
+                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                }
+                val providerFuture = ProcessCameraProvider.getInstance(viewContext)
+                providerFuture.addListener(
+                    {
+                        val cameraProvider = providerFuture.get()
+                        val preview = Preview.Builder().build().also {
+                            it.setSurfaceProvider(previewView.surfaceProvider)
+                        }
+                        val analyzer = ImageAnalysis.Builder()
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .build()
+                            .also {
+                                it.setAnalyzer(cameraExecutor) { imageProxy ->
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastScanAt < 1400L) {
+                                        imageProxy.close()
+                                        return@setAnalyzer
+                                    }
+                                    lastScanAt = now
+                                    scanReceiptImageProxy(imageProxy, onResult)
+                                }
+                            }
+                        cameraProvider.unbindAll()
+                        cameraProvider.bindToLifecycle(
+                            lifecycleOwner,
+                            CameraSelector.DEFAULT_BACK_CAMERA,
+                            preview,
+                            analyzer
+                        )
+                    },
+                    ContextCompat.getMainExecutor(context)
+                )
+                previewView
+            }
+        )
+        ScanFrameOverlay(
+            label = "Receipt items",
+            modifier = Modifier.align(Alignment.Center)
+        )
+    }
+}
+
+@androidx.annotation.OptIn(ExperimentalGetImage::class)
+private fun scanReceiptImageProxy(
+    imageProxy: ImageProxy,
+    onResult: (rawText: String, candidates: List<ReceiptImportCandidate>) -> Unit
+) {
+    val mediaImage = imageProxy.image
+    if (mediaImage == null) {
+        imageProxy.close()
+        return
+    }
+    val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+    TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        .process(image)
+        .addOnSuccessListener { result ->
+            onResult(result.text, ReceiptTextParser.extractItems(result.text))
+        }
+        .addOnCompleteListener {
+            imageProxy.close()
+        }
+}
+
+private fun recognizeReceiptFromImage(
+    context: Context,
+    uri: Uri,
+    onComplete: (rawText: String, candidates: List<ReceiptImportCandidate>) -> Unit
+) {
+    val bitmap = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+    if (bitmap == null) {
+        onComplete("", emptyList())
+        return
+    }
+    TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        .process(InputImage.fromBitmap(bitmap, 0))
+        .addOnSuccessListener { result ->
+            onComplete(result.text, ReceiptTextParser.extractItems(result.text))
+        }
+        .addOnFailureListener {
+            onComplete("", emptyList())
+        }
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable

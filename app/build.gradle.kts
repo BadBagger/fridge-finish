@@ -13,8 +13,8 @@ android {
         applicationId = "com.fridgefinish.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 21
-        versionName = "1.20-shop-notes-scan-card"
+        versionCode = 22
+        versionName = "1.21-receipt-import"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
