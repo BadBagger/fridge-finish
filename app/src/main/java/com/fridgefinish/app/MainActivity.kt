@@ -22,19 +22,29 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -83,6 +93,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -91,10 +102,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -110,6 +123,8 @@ import com.fridgefinish.app.domain.FoodLocation
 import com.fridgefinish.app.domain.FreshnessCalculator
 import com.fridgefinish.app.domain.FreshnessStatus
 import com.fridgefinish.app.domain.DateTextParser
+import com.fridgefinish.app.domain.cleanShoppingName
+import com.fridgefinish.app.domain.missingItemsNotAlreadyInShop
 import com.fridgefinish.app.subscription.FeatureGateResult
 import com.fridgefinish.app.subscription.FridgeFinishFeatureGate
 import com.fridgefinish.app.subscription.FridgeFinishPlans
@@ -123,6 +138,7 @@ import coil.compose.AsyncImage
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import kotlinx.coroutines.delay
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -170,6 +186,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
     var editingFood by remember { mutableStateOf<FoodItemEntity?>(null) }
     var addingFood by remember { mutableStateOf<FoodItemEntity?>(null) }
     var upgradePrompt by remember { mutableStateOf<FeatureGateResult.UpgradeRequired?>(null) }
+    var shopMessage by rememberSaveable { mutableStateOf<String?>(null) }
 
     fun showGate(result: FeatureGateResult): Boolean {
         return when (result) {
@@ -317,7 +334,14 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                         uiState = uiState,
                         onOpenPlus = { screen = Screen.PLUS },
                         onAddMissingToRestock = { idea ->
-                            idea.missing.forEach { missing ->
+                            val mergeResult = missingItemsNotAlreadyInShop(
+                                missingItems = idea.missing,
+                                openShopItems = uiState.restock
+                                .filterNot { it.isPurchased }
+                                    .map { it.name }
+                            )
+                            val newItems = mergeResult.itemsToAdd
+                            newItems.forEach { missing ->
                                 viewModel.saveRestock(
                                     RestockItemEntity(
                                         name = missing,
@@ -326,10 +350,27 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                                     )
                                 )
                             }
+                            val skippedCount = mergeResult.skippedCount
+                            shopMessage = when {
+                                newItems.isNotEmpty() && skippedCount > 0 -> "Added ${newItems.size} item${if (newItems.size == 1) "" else "s"}. $skippedCount already on your list."
+                                newItems.isNotEmpty() -> "Added ${newItems.size} item${if (newItems.size == 1) "" else "s"} for ${idea.title}."
+                                else -> "Those items are already on your list."
+                            }
                             screen = Screen.RESTOCK
                         }
                     )
-                    screen == Screen.RESTOCK -> RestockScreen(uiState, onOpenPlus = { screen = Screen.PLUS }, viewModel::saveRestock, viewModel::toggleRestock, viewModel::deleteRestock)
+                    screen == Screen.RESTOCK -> RestockScreen(
+                        uiState = uiState,
+                        message = shopMessage,
+                        onMessageDismissed = { shopMessage = null },
+                        onOpenPlus = { screen = Screen.PLUS },
+                        onSave = {
+                            shopMessage = null
+                            viewModel.saveRestock(it)
+                        },
+                        onToggle = viewModel::toggleRestock,
+                        onDelete = viewModel::deleteRestock
+                    )
                     screen == Screen.SETTINGS -> SettingsScreen(
                         subscriptionState = uiState.subscription,
                         onOpenPlus = { screen = Screen.PLUS },
@@ -786,7 +827,7 @@ private fun RecipeIdeasScreen(
         )
         return
     }
-    val ideas = remember(uiState.activeFoods) { buildRecipeIdeas(uiState) }
+    val ideas = remember(uiState.activeFoods, uiState.recipes, uiState.recipeIngredients) { buildRecipeIdeas(uiState) }
     val readyIdeas = ideas.filter { it.missing.isEmpty() }
     val almostIdeas = ideas.filter { it.missing.isNotEmpty() }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -874,6 +915,7 @@ private fun EmptyRecipeCard(message: String) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RecipeIdeaCard(idea: RecipeIdea, onAddMissingToRestock: (RecipeIdea) -> Unit) {
     Card(Modifier.fillMaxWidth()) {
@@ -894,14 +936,14 @@ private fun RecipeIdeaCard(idea: RecipeIdea, onAddMissingToRestock: (RecipeIdea)
             Text(idea.note, style = MaterialTheme.typography.bodyMedium)
             Text(idea.steps, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("You have", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 idea.have.take(4).forEach {
                     AssistChip(onClick = {}, label = { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) })
                 }
             }
             if (idea.missing.isNotEmpty()) {
                 Text("Add to make it", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     idea.missing.forEach {
                         AssistChip(onClick = {}, label = { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) })
                     }
@@ -923,7 +965,7 @@ private fun buildRecipeIdeas(uiState: FridgeFinishUiState): List<RecipeIdea> {
     return uiState.recipes.mapNotNull { recipe ->
         val ingredients = ingredientsByRecipe[recipe.id].orEmpty()
         val matchedFoods = ingredients.mapNotNull { ingredient -> foods.firstOrNull { food -> ingredient.matches(food) } }
-        val haveItems = matchedFoods.map { it.name.ifBlank { it.category.label } }
+        val haveItems = matchedFoods.map { it.name.ifBlank { it.category.label }.cleanShoppingName() }
         val missing = ingredients
             .filter { ingredient -> foods.none { food -> ingredient.matches(food) } && ingredient.required }
             .map { it.shoppingLabel() }
@@ -960,7 +1002,7 @@ private fun RecipeIngredientEntity.shoppingLabel(): String {
         "frozen item" -> "frozen fruit"
         "crunch" -> "granola or nuts"
         else -> clean
-    }
+    }.cleanShoppingName()
 }
 
 private fun String.inferShoppingCategory(): FoodCategory {
@@ -1001,6 +1043,7 @@ private fun StatusChip(status: FreshnessStatus) {
     AssistChip(onClick = {}, label = { Text(status.label) }, colors = androidx.compose.material3.AssistChipDefaults.assistChipColors(containerColor = color))
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FoodEditorScreen(
     initial: FoodItemEntity,
@@ -1029,9 +1072,7 @@ private fun FoodEditorScreen(
                 unit.isNotBlank() ||
                 purchaseDate.isNotBlank() ||
                 openedDate.isNotBlank() ||
-                notes.isNotBlank() ||
-                barcode.isNotBlank() ||
-                imageUri.isNotBlank()
+                notes.isNotBlank()
         )
     }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -1042,11 +1083,27 @@ private fun FoodEditorScreen(
     } else {
         (listOf(FoodLocation.FRIDGE) + initial.location).distinct()
     }
+    val hasScannedProduct = barcode.isNotBlank() || imageUri.isNotBlank()
 
-    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        contentPadding = PaddingValues(bottom = 96.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
         item {
             AddFoodHeroCard(subscriptionState)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        }
+        if (hasScannedProduct) {
+            item {
+                ScannedProductReviewCard(
+                    name = name,
+                    imageUri = imageUri,
+                    barcode = barcode,
+                    category = category,
+                    location = location
+                )
+            }
         }
         item {
             Card(Modifier.fillMaxWidth()) {
@@ -1065,7 +1122,7 @@ private fun FoodEditorScreen(
                             OutlinedButton(onClick = onScanBarcode, modifier = Modifier.fillMaxWidth()) { Text("Scan barcode") }
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         FoodCategory.entries.take(6).forEach { preset ->
                             FilterChip(
                                 selected = category == preset,
@@ -1077,7 +1134,7 @@ private fun FoodEditorScreen(
                             )
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         SimpleMenu("Location", location.label, availableLocations.map { it.label }) { label -> location = availableLocations.first { it.label == label } }
                         SimpleMenu("Category", category.label, FoodCategory.entries.map { it.label }) { label ->
                             category = FoodCategory.fromLabel(label)
@@ -1096,7 +1153,7 @@ private fun FoodEditorScreen(
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Date reminder", style = MaterialTheme.typography.titleMedium)
                     DateInput("Expiration date", expirationDate) { expirationDate = it }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         ExpirationPresetChip("2 days") { expirationDate = LocalDate.now().plusDays(2).toString() }
                         ExpirationPresetChip("3 days") { expirationDate = LocalDate.now().plusDays(3).toString() }
                         ExpirationPresetChip("1 week") { expirationDate = LocalDate.now().plusDays(7).toString() }
@@ -1110,7 +1167,7 @@ private fun FoodEditorScreen(
         }
         item {
             OutlinedButton(onClick = { showDetails = !showDetails }, modifier = Modifier.fillMaxWidth()) {
-                Text(if (showDetails) "Hide details" else "Add quantity, opened date, photo, notes")
+                Text(if (showDetails) "Hide details" else "More details")
             }
         }
         if (showDetails) {
@@ -1172,6 +1229,64 @@ private fun FoodEditorScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ScannedProductReviewCard(
+    name: String,
+    imageUri: String,
+    barcode: String,
+    category: FoodCategory,
+    location: FoodLocation
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                "Review scanned product",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                imageUri.takeIf { it.isNotBlank() }?.let {
+                    AsyncImage(
+                        model = it,
+                        contentDescription = name.ifBlank { "Product image" },
+                        modifier = Modifier.size(84.dp),
+                        contentScale = ContentScale.Crop
+                    )
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        name.ifBlank { "Unnamed product" },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (barcode.isNotBlank()) {
+                        Text(
+                            "Barcode $barcode",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                AssistChip(onClick = {}, label = { Text(location.label) })
+                AssistChip(onClick = {}, label = { Text(category.label) })
+            }
+            Text(
+                "Next: confirm the date, then save.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+    }
+}
+
 @Composable
 private fun AddFoodHeroCard(subscriptionState: FridgeFinishSubscriptionState) {
     Card(
@@ -1200,6 +1315,8 @@ private fun ExpirationPresetChip(label: String, onClick: () -> Unit) {
 @Composable
 private fun RestockScreen(
     uiState: FridgeFinishUiState,
+    message: String?,
+    onMessageDismissed: () -> Unit,
     onOpenPlus: () -> Unit,
     onSave: (RestockItemEntity) -> Unit,
     onToggle: (RestockItemEntity) -> Unit,
@@ -1220,6 +1337,11 @@ private fun RestockScreen(
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             ShopHeroCard(openItems.size, purchasedItems.size)
+        }
+        message?.let {
+            item {
+                ShopMessageCard(message = it, onDismiss = onMessageDismissed)
+            }
         }
         item {
             Card(Modifier.fillMaxWidth()) {
@@ -1248,6 +1370,30 @@ private fun RestockScreen(
             item { SectionHeader("Purchased", purchasedItems.size) }
             items(purchasedItems, key = { "done-${it.id}" }) { item ->
                 RestockCard(item, onToggle, onDelete)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShopMessageCard(message: String, onDismiss: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Row(
+            Modifier.padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            Text(
+                message,
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            TextButton(onClick = onDismiss) {
+                Text("Dismiss")
             }
         }
     }
@@ -1291,7 +1437,7 @@ private fun RestockCard(
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = item.isPurchased, onCheckedChange = { onToggle(item) })
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(item.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(item.name.cleanShoppingName(), style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 item.quantity?.takeIf { it.isNotBlank() }?.let {
                     Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -1587,7 +1733,7 @@ private fun parseDate(value: String): LocalDate? =
         null
     }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun DateInput(label: String, value: String, onValueChange: (String) -> Unit) {
     var showPicker by rememberSaveable { mutableStateOf(false) }
@@ -1596,12 +1742,22 @@ private fun DateInput(label: String, value: String, onValueChange: (String) -> U
     var scannedText by rememberSaveable { mutableStateOf("") }
     var detectedDates by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var dateLocked by rememberSaveable { mutableStateOf(false) }
+    val scannerBringIntoViewRequester = remember { BringIntoViewRequester() }
     val selectedMillis = parseDate(value)?.atStartOfDay(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
     val pickerState = rememberDatePickerState(initialSelectedDateMillis = selectedMillis)
+
+    LaunchedEffect(showLiveScanner) {
+        if (showLiveScanner) {
+            delay(150)
+            scannerBringIntoViewRequester.bringIntoView()
+        }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (showLiveScanner) {
             DateOcrLiveScanner(
+                modifier = Modifier.bringIntoViewRequester(scannerBringIntoViewRequester),
+                statusMessage = scanMessage ?: "Reading text. Fill the frame with the printed date.",
                 onResult = { rawText, candidates ->
                     if (dateLocked) return@DateOcrLiveScanner
                     scannedText = rawText.replace('\n', ' ').trim()
@@ -1617,7 +1773,12 @@ private fun DateInput(label: String, value: String, onValueChange: (String) -> U
                         scanMessage = "Reading text, but no date matched yet. Move closer and reduce background text."
                     }
                 },
-                onClose = { showLiveScanner = false }
+                onClose = {
+                    showLiveScanner = false
+                    if (scanMessage == null) {
+                        scanMessage = "Scanner closed. You can pick a date or scan again."
+                    }
+                }
             )
         }
         OutlinedTextField(
@@ -1627,17 +1788,19 @@ private fun DateInput(label: String, value: String, onValueChange: (String) -> U
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { showPicker = true }) { Text("Pick $label") }
-            OutlinedButton(
-                onClick = {
-                    showLiveScanner = !showLiveScanner
-                    scanMessage = if (!showLiveScanner) "Fill the camera with the printed date only." else null
-                    scannedText = ""
-                    detectedDates = emptyList()
-                    dateLocked = false
-                }
-            ) { Text(if (showLiveScanner) "Close scanner" else "Scan $label") }
+            if (!showLiveScanner) {
+                OutlinedButton(
+                    onClick = {
+                        showLiveScanner = true
+                        scanMessage = "Fill the camera with the printed date only."
+                        scannedText = ""
+                        detectedDates = emptyList()
+                        dateLocked = false
+                    }
+                ) { Text("Scan $label") }
+            }
             if (value.isNotBlank()) {
                 TextButton(onClick = {
                     onValueChange("")
@@ -1648,7 +1811,7 @@ private fun DateInput(label: String, value: String, onValueChange: (String) -> U
                 }) { Text("Clear") }
             }
         }
-        scanMessage?.let {
+        if (!showLiveScanner) scanMessage?.let {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -1658,7 +1821,7 @@ private fun DateInput(label: String, value: String, onValueChange: (String) -> U
         }
         if (detectedDates.isNotEmpty()) {
             Text("Detected dates", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 detectedDates.take(3).forEach { candidate ->
                     AssistChip(
                         onClick = {
@@ -1709,8 +1872,11 @@ private fun DateInput(label: String, value: String, onValueChange: (String) -> U
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DateOcrLiveScanner(
+    modifier: Modifier = Modifier,
+    statusMessage: String,
     onResult: (rawText: String, candidates: List<LocalDate>) -> Unit,
     onClose: () -> Unit
 ) {
@@ -1724,24 +1890,43 @@ private fun DateOcrLiveScanner(
         hasPermission = it
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-        ) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Scan the printed date", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                Text("Move close, keep it well lit, and avoid the nutrition label or long ingredient text.", color = MaterialTheme.colorScheme.onPrimaryContainer)
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "Scan the printed date",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Text(
+                    "Move close, keep it well lit, and avoid the nutrition label or long ingredient text.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+
+            if (hasPermission) {
+                LiveDateCamera(onResult)
+            } else {
+                Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
+                    Text("Allow camera")
+                }
+            }
+
+            Text(
+                statusMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onClose) { Text("Done scanning") }
+                TextButton(onClick = onClose) { Text("Close scanner") }
             }
         }
-        if (hasPermission) {
-            LiveDateCamera(onResult)
-        } else {
-            Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
-                Text("Allow camera")
-            }
-        }
-        OutlinedButton(onClick = onClose) { Text("Done scanning") }
     }
 }
 
@@ -1756,47 +1941,85 @@ private fun LiveDateCamera(onResult: (rawText: String, candidates: List<LocalDat
         onDispose { cameraExecutor.shutdown() }
     }
 
-    AndroidView(
-        modifier = Modifier.fillMaxWidth().height(220.dp),
-        factory = { viewContext ->
-            val previewView = PreviewView(viewContext).apply {
-                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-            }
-            val providerFuture = ProcessCameraProvider.getInstance(viewContext)
-            providerFuture.addListener(
-                {
-                    val cameraProvider = providerFuture.get()
-                    val preview = Preview.Builder().build().also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
-                    }
-                    val analyzer = ImageAnalysis.Builder()
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .build()
-                        .also {
-                            it.setAnalyzer(cameraExecutor) { imageProxy ->
-                                val now = System.currentTimeMillis()
-                                if (now - lastScanAt < 900L) {
-                                    imageProxy.close()
-                                    return@setAnalyzer
-                                }
-                                lastScanAt = now
-                                scanDateImageProxy(imageProxy, onResult)
-                            }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 220.dp, max = 320.dp)
+            .height(260.dp)
+            .clip(RoundedCornerShape(12.dp))
+    ) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { viewContext ->
+                val previewView = PreviewView(viewContext).apply {
+                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                }
+                val providerFuture = ProcessCameraProvider.getInstance(viewContext)
+                providerFuture.addListener(
+                    {
+                        val cameraProvider = providerFuture.get()
+                        val preview = Preview.Builder().build().also {
+                            it.setSurfaceProvider(previewView.surfaceProvider)
                         }
-                    cameraProvider.unbindAll()
-                    val camera = cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                        analyzer
-                    )
-                    camera.cameraControl.setZoomRatio(2.0f)
-                },
-                ContextCompat.getMainExecutor(context)
-            )
-            previewView
-        }
-    )
+                        val analyzer = ImageAnalysis.Builder()
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .build()
+                            .also {
+                                it.setAnalyzer(cameraExecutor) { imageProxy ->
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastScanAt < 900L) {
+                                        imageProxy.close()
+                                        return@setAnalyzer
+                                    }
+                                    lastScanAt = now
+                                    scanDateImageProxy(imageProxy, onResult)
+                                }
+                            }
+                        cameraProvider.unbindAll()
+                        val camera = cameraProvider.bindToLifecycle(
+                            lifecycleOwner,
+                            CameraSelector.DEFAULT_BACK_CAMERA,
+                            preview,
+                            analyzer
+                        )
+                        camera.cameraControl.setZoomRatio(2.0f)
+                    },
+                    ContextCompat.getMainExecutor(context)
+                )
+                previewView
+            }
+        )
+        ScanFrameOverlay(
+            label = "Printed date only",
+            modifier = Modifier.align(Alignment.Center)
+        )
+    }
+}
+
+@Composable
+private fun ScanFrameOverlay(label: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.fillMaxWidth(0.82f),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(88.dp)
+                .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(14.dp))
+        )
+        Text(
+            label,
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.86f))
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
 }
 
 @androidx.annotation.OptIn(ExperimentalGetImage::class)

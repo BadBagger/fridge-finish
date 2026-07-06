@@ -17,9 +17,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
@@ -34,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -43,6 +46,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -57,6 +61,9 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 
 @Composable
 fun BarcodeScannerScreen(
@@ -97,13 +104,15 @@ fun BarcodeScannerScreen(
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 112.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         ScanHeroCard(lookupState)
 
         if (hasPermission && showCamera) {
-            BarcodeCameraPreview { barcode ->
+            BarcodeScannerCard(
+                onManualEntry = { showManualFallback = true }
+            ) { barcode ->
                 if (scannerActive) {
                     lastDetectedBarcode = barcode
                     manualBarcode = barcode
@@ -193,7 +202,7 @@ fun BarcodeScannerScreen(
             }
         }
 
-        if (!productFound || showManualFallback) {
+        if (showManualFallback || lookupState is BarcodeLookupState.NotFound) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Manual fallback", style = MaterialTheme.typography.titleMedium)
@@ -269,6 +278,41 @@ private fun ScanTipCard() {
 }
 
 @Composable
+private fun BarcodeScannerCard(
+    onManualEntry: () -> Unit,
+    onBarcodeScanned: (String) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Scan barcode", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Hold the barcode inside the camera view. Product lookup pauses after a match.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            BarcodeCameraPreview(onBarcodeScanned)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "UPC or EAN only",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(onClick = onManualEntry) {
+                    Text("Enter barcode")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun BarcodeCameraPreview(onBarcodeScanned: (String) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -279,45 +323,80 @@ private fun BarcodeCameraPreview(onBarcodeScanned: (String) -> Unit) {
         onDispose { cameraExecutor.shutdown() }
     }
 
-    AndroidView(
-        modifier = Modifier.fillMaxWidth().height(280.dp),
-        factory = { viewContext ->
-            val previewView = PreviewView(viewContext).apply {
-                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-            }
-            val providerFuture = ProcessCameraProvider.getInstance(viewContext)
-            providerFuture.addListener(
-                {
-                    val cameraProvider = providerFuture.get()
-                    val preview = Preview.Builder().build().also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
-                    }
-                    val analyzer = ImageAnalysis.Builder()
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .build()
-                        .also {
-                            it.setAnalyzer(cameraExecutor) { imageProxy ->
-                                scanImageProxy(imageProxy) { barcode ->
-                                    if (barcode != lastBarcode) {
-                                        lastBarcode = barcode
-                                        onBarcodeScanned(barcode)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 220.dp, max = 320.dp)
+            .height(260.dp)
+            .clip(RoundedCornerShape(12.dp))
+    ) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { viewContext ->
+                val previewView = PreviewView(viewContext).apply {
+                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                }
+                val providerFuture = ProcessCameraProvider.getInstance(viewContext)
+                providerFuture.addListener(
+                    {
+                        val cameraProvider = providerFuture.get()
+                        val preview = Preview.Builder().build().also {
+                            it.setSurfaceProvider(previewView.surfaceProvider)
+                        }
+                        val analyzer = ImageAnalysis.Builder()
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .build()
+                            .also {
+                                it.setAnalyzer(cameraExecutor) { imageProxy ->
+                                    scanImageProxy(imageProxy) { barcode ->
+                                        if (barcode != lastBarcode) {
+                                            lastBarcode = barcode
+                                            onBarcodeScanned(barcode)
+                                        }
                                     }
                                 }
                             }
-                        }
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                        analyzer
-                    )
-                },
-                ContextCompat.getMainExecutor(context)
-            )
-            previewView
-        }
-    )
+                        cameraProvider.unbindAll()
+                        cameraProvider.bindToLifecycle(
+                            lifecycleOwner,
+                            CameraSelector.DEFAULT_BACK_CAMERA,
+                            preview,
+                            analyzer
+                        )
+                    },
+                    ContextCompat.getMainExecutor(context)
+                )
+                previewView
+            }
+        )
+        BarcodeScanFrameOverlay(Modifier.align(Alignment.Center))
+    }
+}
+
+@Composable
+private fun BarcodeScanFrameOverlay(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.fillMaxWidth(0.82f),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(96.dp)
+                .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(14.dp))
+        )
+        Text(
+            "Center barcode",
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.86f))
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
 }
 
 @androidx.annotation.OptIn(ExperimentalGetImage::class)

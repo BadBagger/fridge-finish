@@ -13,8 +13,8 @@ android {
         applicationId = "com.fridgefinish.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.12-date-scan-accuracy"
+        versionCode = 14
+        versionName = "1.13-scanner-shop-polish"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
