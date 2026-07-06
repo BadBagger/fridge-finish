@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -47,6 +48,7 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
@@ -103,10 +105,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -805,6 +809,7 @@ private fun Screen.toLocation(): FoodLocation = when (this) {
 private data class RecipeIdea(
     val title: String,
     val minutes: Int,
+    val servings: String,
     val have: List<String>,
     val missing: List<String>,
     val urgentCount: Int,
@@ -830,6 +835,17 @@ private fun RecipeIdeasScreen(
     val ideas = remember(uiState.activeFoods, uiState.recipes, uiState.recipeIngredients) { buildRecipeIdeas(uiState) }
     val readyIdeas = ideas.filter { it.missing.isEmpty() }
     val almostIdeas = ideas.filter { it.missing.isNotEmpty() }
+    var selectedRecipe by remember { mutableStateOf<RecipeIdea?>(null) }
+    selectedRecipe?.let { idea ->
+        RecipeInfoDialog(
+            idea = idea,
+            onDismiss = { selectedRecipe = null },
+            onAddMissingToRestock = {
+                selectedRecipe = null
+                onAddMissingToRestock(idea)
+            }
+        )
+    }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             RecipeHeroCard(ideas, uiState)
@@ -842,18 +858,21 @@ private fun RecipeIdeasScreen(
             }
         }
         item {
+            MealPlanCard(ideas)
+        }
+        item {
             SectionHeader("Ready now", readyIdeas.size)
             if (readyIdeas.isEmpty()) EmptyRecipeCard("No ready recipes yet. Add a few staple items or scan food you already have.")
         }
         items(readyIdeas, key = { "ready-${it.title}" }) { idea ->
-            RecipeIdeaCard(idea, onAddMissingToRestock)
+            RecipeIdeaCard(idea, onAddMissingToRestock, onMoreInfo = { selectedRecipe = idea })
         }
         item {
             SectionHeader("Almost there", almostIdeas.size)
             if (almostIdeas.isEmpty()) EmptyRecipeCard("No almost-ready ideas right now.")
         }
         items(almostIdeas, key = { "almost-${it.title}" }) { idea ->
-            RecipeIdeaCard(idea, onAddMissingToRestock)
+            RecipeIdeaCard(idea, onAddMissingToRestock, onMoreInfo = { selectedRecipe = idea })
         }
     }
 }
@@ -915,17 +934,199 @@ private fun EmptyRecipeCard(message: String) {
     }
 }
 
+@Composable
+private fun MealPlanCard(ideas: List<RecipeIdea>) {
+    val plan = ideas.take(3)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Use-up meal plan", style = MaterialTheme.typography.titleMedium)
+            if (plan.isEmpty()) {
+                Text("Add or scan more food to build a simple plan from what is already in the fridge.")
+            } else {
+                Text("A quick plan based on the best matches in your fridge right now.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                plan.forEachIndexed { index, idea ->
+                    val slot = when (index) {
+                        0 -> "Next meal"
+                        1 -> "Later today"
+                        else -> "Backup"
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+                        AssistChip(onClick = {}, label = { Text(slot) })
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(idea.title, style = MaterialTheme.typography.titleSmall)
+                            Text("${idea.servings} - ${idea.minutes} min - ${if (idea.missing.isEmpty()) "ready now" else "${idea.missing.size} to buy"}")
+                        }
+                    }
+                }
+                Text("For a larger family, use More info to see what to double.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecipePreparedVisual(idea: RecipeIdea, modifier: Modifier = Modifier) {
+    val style = idea.visualStyle()
+    Box(
+        modifier = modifier
+            .aspectRatio(16f / 9f)
+            .clip(RoundedCornerShape(18.dp))
+            .background(style.background)
+            .padding(16.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth(0.58f)
+                .aspectRatio(1f)
+                .shadow(8.dp, RoundedCornerShape(999.dp))
+                .clip(RoundedCornerShape(999.dp))
+                .background(MaterialTheme.colorScheme.surface)
+        )
+        style.items.forEach { item ->
+            Box(
+                modifier = Modifier
+                    .align(item.alignment)
+                    .fillMaxWidth(item.widthFraction)
+                    .aspectRatio(item.aspectRatio)
+                    .clip(RoundedCornerShape(item.cornerRadius))
+                    .background(item.color)
+            )
+        }
+        Text(
+            style.label,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .clip(RoundedCornerShape(999.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+private data class RecipeVisualStyle(
+    val label: String,
+    val background: Color,
+    val items: List<RecipeVisualItem>
+)
+
+private data class RecipeVisualItem(
+    val color: Color,
+    val alignment: Alignment,
+    val widthFraction: Float,
+    val aspectRatio: Float = 1f,
+    val cornerRadius: Int = 999
+)
+
+private fun RecipeIdea.visualStyle(): RecipeVisualStyle {
+    val text = title.lowercase()
+    return when {
+        "smoothie" in text -> RecipeVisualStyle(
+            label = "Smoothie",
+            background = Color(0xFFE8F7F0),
+            items = listOf(
+                RecipeVisualItem(Color(0xFFE86D9A), Alignment.Center, 0.34f, 0.72f, 24),
+                RecipeVisualItem(Color(0xFF4CAF50), Alignment.TopEnd, 0.16f),
+                RecipeVisualItem(Color(0xFF7E57C2), Alignment.BottomStart, 0.13f)
+            )
+        )
+        "omelet" in text -> RecipeVisualStyle(
+            label = "Omelet plate",
+            background = Color(0xFFFFF7E0),
+            items = listOf(
+                RecipeVisualItem(Color(0xFFFFCC66), Alignment.Center, 0.48f, 1.85f, 999),
+                RecipeVisualItem(Color(0xFF4CAF50), Alignment.TopStart, 0.14f),
+                RecipeVisualItem(Color(0xFFE85D5D), Alignment.CenterEnd, 0.12f)
+            )
+        )
+        "salad" in text -> RecipeVisualStyle(
+            label = "Salad bowl",
+            background = Color(0xFFEAF8E7),
+            items = listOf(
+                RecipeVisualItem(Color(0xFF66BB6A), Alignment.Center, 0.48f),
+                RecipeVisualItem(Color(0xFFE85D5D), Alignment.TopEnd, 0.12f),
+                RecipeVisualItem(Color(0xFFFFF176), Alignment.BottomStart, 0.11f)
+            )
+        )
+        "soup" in text -> RecipeVisualStyle(
+            label = "Soup bowl",
+            background = Color(0xFFFFF0E6),
+            items = listOf(
+                RecipeVisualItem(Color(0xFFE8793E), Alignment.Center, 0.46f),
+                RecipeVisualItem(Color(0xFF66BB6A), Alignment.TopStart, 0.1f),
+                RecipeVisualItem(Color(0xFFFFD54F), Alignment.BottomEnd, 0.11f)
+            )
+        )
+        "pasta" in text -> RecipeVisualStyle(
+            label = "Pasta",
+            background = Color(0xFFFFF8DF),
+            items = listOf(
+                RecipeVisualItem(Color(0xFFFFD166), Alignment.Center, 0.5f, 1.35f, 999),
+                RecipeVisualItem(Color(0xFFD94F45), Alignment.CenterEnd, 0.15f),
+                RecipeVisualItem(Color(0xFF4CAF50), Alignment.TopStart, 0.11f)
+            )
+        )
+        "quesadilla" in text -> RecipeVisualStyle(
+            label = "Quesadilla",
+            background = Color(0xFFFFF3D6),
+            items = listOf(
+                RecipeVisualItem(Color(0xFFFFC857), Alignment.Center, 0.52f, 1.55f, 28),
+                RecipeVisualItem(Color(0xFF66BB6A), Alignment.TopEnd, 0.11f),
+                RecipeVisualItem(Color(0xFFD94F45), Alignment.BottomStart, 0.12f)
+            )
+        )
+        "rice" in text || "grain" in text -> RecipeVisualStyle(
+            label = "Rice bowl",
+            background = Color(0xFFF0F7EA),
+            items = listOf(
+                RecipeVisualItem(Color(0xFFFFF8E1), Alignment.Center, 0.48f),
+                RecipeVisualItem(Color(0xFF66BB6A), Alignment.TopEnd, 0.13f),
+                RecipeVisualItem(Color(0xFFE8793E), Alignment.BottomStart, 0.13f)
+            )
+        )
+        "yogurt" in text -> RecipeVisualStyle(
+            label = "Yogurt bowl",
+            background = Color(0xFFF4F1FF),
+            items = listOf(
+                RecipeVisualItem(Color(0xFFFFFFFF), Alignment.Center, 0.46f),
+                RecipeVisualItem(Color(0xFFE85D5D), Alignment.TopEnd, 0.12f),
+                RecipeVisualItem(Color(0xFF8D6E63), Alignment.BottomStart, 0.14f)
+            )
+        )
+        else -> RecipeVisualStyle(
+            label = "Snack plate",
+            background = Color(0xFFEAF8F2),
+            items = listOf(
+                RecipeVisualItem(Color(0xFF66BB6A), Alignment.CenterStart, 0.22f),
+                RecipeVisualItem(Color(0xFFFFD166), Alignment.Center, 0.2f),
+                RecipeVisualItem(Color(0xFFD7A86E), Alignment.CenterEnd, 0.2f)
+            )
+        )
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun RecipeIdeaCard(idea: RecipeIdea, onAddMissingToRestock: (RecipeIdea) -> Unit) {
+private fun RecipeIdeaCard(
+    idea: RecipeIdea,
+    onAddMissingToRestock: (RecipeIdea) -> Unit,
+    onMoreInfo: () -> Unit
+) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            RecipePreparedVisual(idea, modifier = Modifier.fillMaxWidth())
             Row(verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f)) {
                     Text(idea.title, style = MaterialTheme.typography.titleMedium)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Timer, contentDescription = null, modifier = Modifier.size(16.dp))
                         Text("${idea.minutes} min")
+                        Text(idea.servings)
                         Text(if (idea.missing.isEmpty()) "Ready now" else "Almost there", color = MaterialTheme.colorScheme.primary)
                     }
                 }
@@ -953,9 +1154,62 @@ private fun RecipeIdeaCard(idea: RecipeIdea, onAddMissingToRestock: (RecipeIdea)
                     Text("Add missing to Shop")
                 }
             }
+            OutlinedButton(onClick = onMoreInfo, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("More info")
+            }
             Text(idea.sourceName, style = MaterialTheme.typography.bodySmall)
         }
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RecipeInfoDialog(
+    idea: RecipeIdea,
+    onDismiss: () -> Unit,
+    onAddMissingToRestock: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            if (idea.missing.isNotEmpty()) {
+                TextButton(onClick = onAddMissingToRestock) { Text("Add missing") }
+            } else {
+                TextButton(onClick = onDismiss) { Text("Done") }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+        title = { Text(idea.title) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                RecipePreparedVisual(idea, modifier = Modifier.fillMaxWidth())
+                Text("${idea.minutes} minutes - ${idea.servings}")
+                Text(idea.note)
+                Text("For a family: double the listed ingredients for 4+ servings, and add an easy side if needed.", style = MaterialTheme.typography.bodySmall)
+                Text("Use first", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    idea.have.take(6).forEach { AssistChip(onClick = {}, label = { Text(it) }) }
+                }
+                if (idea.missing.isNotEmpty()) {
+                    Text("Need to buy", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        idea.missing.forEach { AssistChip(onClick = {}, label = { Text(it) }) }
+                    }
+                }
+                Text("Steps", style = MaterialTheme.typography.labelLarge)
+                idea.detailSteps().forEachIndexed { index, step ->
+                    Text("${index + 1}. $step")
+                }
+                Text("Dates are reminders, not safety guarantees. Check before eating.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    )
 }
 
 private fun buildRecipeIdeas(uiState: FridgeFinishUiState): List<RecipeIdea> {
@@ -975,6 +1229,7 @@ private fun buildRecipeIdeas(uiState: FridgeFinishUiState): List<RecipeIdea> {
         RecipeIdea(
             recipe.title,
             recipe.minutes,
+            recipe.estimatedServings(),
             haveItems.distinct(),
             missing,
             urgent,
@@ -987,6 +1242,28 @@ private fun buildRecipeIdeas(uiState: FridgeFinishUiState): List<RecipeIdea> {
             .thenByDescending { it.urgentCount }
             .thenBy { it.minutes }
     )
+}
+
+private fun RecipeEntity.estimatedServings(): String {
+    val text = title.lowercase()
+    return when {
+        listOf("smoothie", "yogurt", "snack").any { text.contains(it) } -> "Serves 1-2"
+        listOf("soup", "pasta", "fried rice", "grain bowl", "salad").any { text.contains(it) } -> "Serves 3-4"
+        listOf("omelet", "quesadilla").any { text.contains(it) } -> "Serves 2"
+        else -> "Serves 2-3"
+    }
+}
+
+private fun RecipeIdea.detailSteps(): List<String> {
+    val baseSteps = steps.split(".")
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+    val prep = when {
+        missing.isEmpty() -> "Pull out the listed fridge items first so the oldest food gets used."
+        else -> "Gather what you have, then add the missing item${if (missing.size == 1) "" else "s"} before cooking."
+    }
+    val scale = "For more servings, double the main ingredients and keep seasoning flexible."
+    return (listOf(prep) + baseSteps + scale).distinct()
 }
 
 private fun RecipeIngredientEntity.shoppingLabel(): String {
