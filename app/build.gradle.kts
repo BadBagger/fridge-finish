@@ -13,8 +13,8 @@ android {
         applicationId = "com.fridgefinish.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 23
-        versionName = "1.22-receipt-parser-fix"
+        versionCode = 24
+        versionName = "1.23-receipt-ocr-fallback"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

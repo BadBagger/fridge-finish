@@ -140,4 +140,56 @@ class ReceiptTextParserTest {
             items.map { it.name }
         )
     }
+
+    @Test
+    fun flattenedCostcoOcrKeepsItemNumberRowsWithoutPrices() {
+        val items = ReceiptTextParser.extractItems(
+            """
+            CoSTOO EWHOLESALE Seattle #01 4401 4th Ave South Seattle WA 98134
+            7M Member 121993614208 24311 VAR MUFFIN 87745 ROTISSERIE
+            11545 STREET TACOS 990551 BASIL PESTO 878137 18CT EGGS SUBTOTAL 211.27
+            """.trimIndent(),
+            today
+        )
+
+        assertEquals(
+            listOf("Var Muffin", "Rotisserie", "Street Tacos", "Basil Pesto", "Eggs"),
+            items.map { it.name }
+        )
+    }
+
+    @Test
+    fun flattenedWalmartOcrKeepsUpcRows() {
+        val items = ReceiptTextParser.extractItems(
+            """
+            WAL-MART-SUPERSTORE MANAGER TOD LINGA HAND TOWEL 075953630184 2.97 X
+            GATORADE 068949055223 2.00 X PUSH PINS 088348997350 1.24 X
+            BREAD 007225003712 F 2.88 N GV PNT BUTTR 007874237003 F 3.84 N
+            GV CHNK CHKN 007874206784 F 1.98 X EGGS 060538871459 F 1.88 O SUBTOTAL
+            """.trimIndent(),
+            today
+        )
+
+        assertEquals(
+            listOf("Gatorade", "Bread", "Gv Peanut Butter", "Gv Chunk Chicken", "Eggs"),
+            items.map { it.name }
+        )
+    }
+
+    @Test
+    fun flattenedProduceOcrUsesPriceBoundaries() {
+        val items = ReceiptTextParser.extractItems(
+            """
+            DATE 06/01/2016 ZUCHINNI GREEN $4.66 0.778kg NET @ $5.99/kg
+            BANANA CAVENDISH $1.32 SPECIAL $0.99 POTATOES BRUSHED $3.97
+            BROCCOLI $4.84 SUBTOTAL $39.20 CASH $50.00 CHANGE $25.80
+            """.trimIndent(),
+            today
+        )
+
+        assertEquals(
+            listOf("Zuchinni Green", "Banana Cavendish", "Potatoes Brushed", "Broccoli"),
+            items.map { it.name }
+        )
+    }
 }
