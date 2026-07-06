@@ -25,6 +25,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -105,12 +106,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -848,7 +847,11 @@ private fun RecipeIdeasScreen(
     }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            RecipeHeroCard(ideas, uiState)
+            RecipeHeroCard(
+                ideas = ideas,
+                uiState = uiState,
+                onOpenRecipe = { selectedRecipe = it }
+            )
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
@@ -858,7 +861,10 @@ private fun RecipeIdeasScreen(
             }
         }
         item {
-            MealPlanCard(ideas)
+            MealPlanCard(
+                ideas = ideas,
+                onOpenRecipe = { selectedRecipe = it }
+            )
         }
         item {
             SectionHeader("Ready now", readyIdeas.size)
@@ -878,7 +884,11 @@ private fun RecipeIdeasScreen(
 }
 
 @Composable
-private fun RecipeHeroCard(ideas: List<RecipeIdea>, uiState: FridgeFinishUiState) {
+private fun RecipeHeroCard(
+    ideas: List<RecipeIdea>,
+    uiState: FridgeFinishUiState,
+    onOpenRecipe: (RecipeIdea) -> Unit
+) {
     val best = ideas.firstOrNull()
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -893,18 +903,35 @@ private fun RecipeHeroCard(ideas: List<RecipeIdea>, uiState: FridgeFinishUiState
                 Text("Cook from your fridge", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
                 Icon(Icons.Default.Restaurant, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
             }
-            Text(
-                best?.title ?: "Add food to unlock recipe ideas",
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                best?.let { if (it.missing.isEmpty()) "You can make this with what you have." else "You only need ${it.missing.size} more item${if (it.missing.size == 1) "" else "s"}." }
-                    ?: "${uiState.activeFoods.size} tracked items available for matching.",
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
+            if (best == null) {
+                Text(
+                    "Add food to unlock recipe ideas",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Text("${uiState.activeFoods.size} tracked items available for matching.", color = MaterialTheme.colorScheme.onPrimaryContainer)
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.88f))
+                        .clickable { onOpenRecipe(best) }
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text("Best match", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                    Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.weight(1f)) {
+                            Text(best.title, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(if (best.missing.isEmpty()) "You can make this with what you have." else "You only need ${best.missing.size} more item${if (best.missing.size == 1) "" else "s"}.")
+                        }
+                        TextButton(onClick = { onOpenRecipe(best) }) {
+                            Text("View")
+                        }
+                    }
+                }
+            }
             Text(
                 "Local recipe ideas. Check dates and use your judgment.",
                 style = MaterialTheme.typography.bodySmall,
@@ -935,7 +962,7 @@ private fun EmptyRecipeCard(message: String) {
 }
 
 @Composable
-private fun MealPlanCard(ideas: List<RecipeIdea>) {
+private fun MealPlanCard(ideas: List<RecipeIdea>, onOpenRecipe: (RecipeIdea) -> Unit) {
     val plan = ideas.take(3)
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -953,11 +980,22 @@ private fun MealPlanCard(ideas: List<RecipeIdea>) {
                         1 -> "Later today"
                         else -> "Backup"
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onOpenRecipe(idea) }
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
                         AssistChip(onClick = {}, label = { Text(slot) })
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(idea.title, style = MaterialTheme.typography.titleSmall)
                             Text("${idea.servings} - ${idea.minutes} min - ${if (idea.missing.isEmpty()) "ready now" else "${idea.missing.size} to buy"}")
+                        }
+                        TextButton(onClick = { onOpenRecipe(idea) }) {
+                            Text("View")
                         }
                     }
                 }
@@ -982,7 +1020,6 @@ private fun RecipePreparedVisual(idea: RecipeIdea, modifier: Modifier = Modifier
                 .align(Alignment.Center)
                 .fillMaxWidth(0.58f)
                 .aspectRatio(1f)
-                .shadow(8.dp, RoundedCornerShape(999.dp))
                 .clip(RoundedCornerShape(999.dp))
                 .background(MaterialTheme.colorScheme.surface)
         )

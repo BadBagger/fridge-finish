@@ -13,8 +13,8 @@ android {
         applicationId = "com.fridgefinish.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.14-recipe-visuals"
+        versionCode = 16
+        versionName = "1.15-recipe-tab-fix"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
