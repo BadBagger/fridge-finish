@@ -350,7 +350,8 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                                     RestockItemEntity(
                                         name = missing,
                                         category = missing.inferShoppingCategory(),
-                                        quantity = "For ${idea.title}"
+                                        note = "For ${idea.title}. ${idea.servings}.",
+                                        quantity = "Recipe item"
                                     )
                                 )
                             }
@@ -405,6 +406,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                             ))
                             viewModel.clearBarcodeLookup()
                         },
+                        onScanAnother = viewModel::clearBarcodeLookup,
                         onCancel = {
                             viewModel.clearBarcodeLookup()
                             screen = Screen.TODAY
@@ -1551,6 +1553,7 @@ private fun RestockScreen(
     }
     var name by rememberSaveable { mutableStateOf("") }
     var quantity by rememberSaveable { mutableStateOf("") }
+    var note by rememberSaveable { mutableStateOf("") }
     val openItems = uiState.restock.filterNot { it.isPurchased }
     val purchasedItems = uiState.restock.filter { it.isPurchased }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1567,12 +1570,27 @@ private fun RestockScreen(
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Add to shop", style = MaterialTheme.typography.titleMedium)
                     OutlinedTextField(name, { name = it }, label = { Text("Item name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                    OutlinedTextField(quantity, { quantity = it }, label = { Text("Quantity or note") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    OutlinedTextField(quantity, { quantity = it }, label = { Text("Quantity") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    OutlinedTextField(
+                        note,
+                        { note = it },
+                        label = { Text("Private note") },
+                        placeholder = { Text("Brand, size, recipe, or store note") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2
+                    )
                     Button(onClick = {
                         if (name.isNotBlank()) {
-                            onSave(RestockItemEntity(name = name.trim(), quantity = quantity.takeIf { it.isNotBlank() }))
+                            onSave(
+                                RestockItemEntity(
+                                    name = name.trim(),
+                                    quantity = quantity.takeIf { it.isNotBlank() },
+                                    note = note.takeIf { it.isNotBlank() }
+                                )
+                            )
                             name = ""
                             quantity = ""
+                            note = ""
                         }
                     }, modifier = Modifier.fillMaxWidth()) { Text("Add item") }
                 }
@@ -1659,6 +1677,9 @@ private fun RestockCard(
                 Text(item.name.cleanShoppingName(), style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 item.quantity?.takeIf { it.isNotBlank() }?.let {
                     Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                item.note?.takeIf { it.isNotBlank() }?.let {
+                    Text("Note: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 item.category?.let {
                     AssistChip(onClick = {}, label = { Text(it.label) })

@@ -10,6 +10,7 @@ data class RestockItemEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val quantity: String? = null,
+    val note: String? = null,
     val category: FoodCategory? = null,
     val isPurchased: Boolean = false,
     val createdAt: Instant = Instant.now(),

@@ -49,6 +49,7 @@ class FridgeFinishRepository(
                 RestockItemEntity(
                     name = item.name,
                     quantity = item.quantity,
+                    note = "Replaces finished ${item.location.label} item.",
                     category = item.category
                 )
             )

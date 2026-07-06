@@ -25,7 +25,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -71,6 +73,7 @@ fun BarcodeScannerScreen(
     onBarcodeScanned: (String) -> Unit,
     onUseProduct: (BarcodeProduct) -> Unit,
     onUseBarcodeManually: (String) -> Unit,
+    onScanAnother: () -> Unit,
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
@@ -139,7 +142,12 @@ fun BarcodeScannerScreen(
                         Text("Camera paused", style = MaterialTheme.typography.titleMedium)
                         Text("Review the product below or scan another barcode.")
                     }
-                    OutlinedButton(onClick = { showCamera = true }) {
+                    OutlinedButton(onClick = {
+                        lastDetectedBarcode = ""
+                        manualBarcode = ""
+                        showCamera = true
+                        onScanAnother()
+                    }) {
                         Text("Rescan")
                     }
                 }
@@ -161,33 +169,18 @@ fun BarcodeScannerScreen(
                 }
             }
             is BarcodeLookupState.Found -> {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Product found", style = MaterialTheme.typography.titleMedium)
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            lookupState.product.imageUrl?.takeIf { it.isNotBlank() }?.let {
-                                AsyncImage(
-                                    model = it,
-                                    contentDescription = lookupState.product.name,
-                                    modifier = Modifier.size(76.dp),
-                                    contentScale = ContentScale.Crop
-                                )
-                            }
-                            Column(Modifier.weight(1f)) {
-                                Text(lookupState.product.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                Text("Category guess: ${lookupState.product.category.label}")
-                                Text("Barcode: ${lookupState.product.barcode}", style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                        Text("Next: check the printed date, then save the item.", style = MaterialTheme.typography.bodySmall)
-                        Button(onClick = { onUseProduct(lookupState.product) }, modifier = Modifier.fillMaxWidth()) {
-                            Text("Review and add")
-                        }
-                        OutlinedButton(onClick = { showManualFallback = true }, modifier = Modifier.fillMaxWidth()) {
-                            Text("Enter barcode instead")
-                        }
-                    }
-                }
+                ProductFoundCard(
+                    product = lookupState.product,
+                    onUseProduct = { onUseProduct(lookupState.product) },
+                    onScanAnother = {
+                        lastDetectedBarcode = ""
+                        manualBarcode = ""
+                        showCamera = true
+                        showManualFallback = false
+                        onScanAnother()
+                    },
+                    onManualEntry = { showManualFallback = true }
+                )
             }
             is BarcodeLookupState.NotFound -> {
                 Card(Modifier.fillMaxWidth()) {
@@ -232,6 +225,74 @@ fun BarcodeScannerScreen(
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
+        }
+    }
+}
+
+@Composable
+private fun ProductFoundCard(
+    product: BarcodeProduct,
+    onUseProduct: () -> Unit,
+    onScanAnother: () -> Unit,
+    onManualEntry: () -> Unit
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f)) {
+                    Text("Product found", style = MaterialTheme.typography.titleLarge)
+                    Text("Review it, then choose the date on the food form.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            product.imageUrl?.takeIf { it.isNotBlank() }?.let {
+                AsyncImage(
+                    model = it,
+                    contentDescription = product.name,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 180.dp, max = 240.dp)
+                        .clip(RoundedCornerShape(16.dp)),
+                    contentScale = ContentScale.Fit
+                )
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(product.name, style = MaterialTheme.typography.titleMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        AssistChip(onClick = {}, label = { Text(product.category.label) })
+                        AssistChip(onClick = {}, label = { Text(product.barcode) })
+                    }
+                    Text(
+                        "Fridge Finish uses this to fill the item name and photo. Expiration dates still come from the package.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Button(onClick = onUseProduct, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.ShoppingCart, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("Add expiration date")
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = onScanAnother, modifier = Modifier.weight(1f)) {
+                    Text("Scan another")
+                }
+                OutlinedButton(onClick = onManualEntry, modifier = Modifier.weight(1f)) {
+                    Text("Edit barcode")
+                }
+            }
+            Text(
+                "Dates are reminders, not safety guarantees. Check before eating.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

@@ -2,13 +2,15 @@ package com.fridgefinish.app.data
 
 import android.content.Context
 import androidx.room.Database
+import androidx.room.migration.Migration
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [FoodItemEntity::class, RestockItemEntity::class, RecipeEntity::class, RecipeIngredientEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -20,6 +22,12 @@ abstract class FridgeFinishDatabase : RoomDatabase() {
     companion object {
         @Volatile private var instance: FridgeFinishDatabase? = null
 
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE restock_items ADD COLUMN note TEXT")
+            }
+        }
+
         fun get(context: Context): FridgeFinishDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -27,6 +35,7 @@ abstract class FridgeFinishDatabase : RoomDatabase() {
                     FridgeFinishDatabase::class.java,
                     "fridge_finish.db"
                 )
+                    .addMigrations(MIGRATION_3_4)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { instance = it }
