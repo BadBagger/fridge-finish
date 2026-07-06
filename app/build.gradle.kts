@@ -13,8 +13,8 @@ android {
         applicationId = "com.fridgefinish.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 17
-        versionName = "1.16-recipe-scroll-fix"
+        versionCode = 18
+        versionName = "1.17-recipe-launch-fix"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

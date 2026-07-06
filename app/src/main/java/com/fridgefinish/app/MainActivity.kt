@@ -1005,148 +1005,6 @@ private fun MealPlanCard(ideas: List<RecipeIdea>, onOpenRecipe: (RecipeIdea) -> 
     }
 }
 
-@Composable
-private fun RecipePreparedVisual(idea: RecipeIdea, modifier: Modifier = Modifier) {
-    val style = idea.visualStyle()
-    Box(
-        modifier = modifier
-            .aspectRatio(16f / 9f)
-            .clip(RoundedCornerShape(18.dp))
-            .background(style.background)
-            .padding(16.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .fillMaxWidth(0.58f)
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(999.dp))
-                .background(MaterialTheme.colorScheme.surface)
-        )
-        style.items.forEach { item ->
-            Box(
-                modifier = Modifier
-                    .align(item.alignment)
-                    .fillMaxWidth(item.widthFraction)
-                    .aspectRatio(item.aspectRatio)
-                    .clip(RoundedCornerShape(item.cornerRadius))
-                    .background(item.color)
-            )
-        }
-        Text(
-            style.label,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .clip(RoundedCornerShape(999.dp))
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-    }
-}
-
-private data class RecipeVisualStyle(
-    val label: String,
-    val background: Color,
-    val items: List<RecipeVisualItem>
-)
-
-private data class RecipeVisualItem(
-    val color: Color,
-    val alignment: Alignment,
-    val widthFraction: Float,
-    val aspectRatio: Float = 1f,
-    val cornerRadius: Int = 999
-)
-
-private fun RecipeIdea.visualStyle(): RecipeVisualStyle {
-    val text = title.lowercase()
-    return when {
-        "smoothie" in text -> RecipeVisualStyle(
-            label = "Smoothie",
-            background = Color(0xFFE8F7F0),
-            items = listOf(
-                RecipeVisualItem(Color(0xFFE86D9A), Alignment.Center, 0.34f, 0.72f, 24),
-                RecipeVisualItem(Color(0xFF4CAF50), Alignment.TopEnd, 0.16f),
-                RecipeVisualItem(Color(0xFF7E57C2), Alignment.BottomStart, 0.13f)
-            )
-        )
-        "omelet" in text -> RecipeVisualStyle(
-            label = "Omelet plate",
-            background = Color(0xFFFFF7E0),
-            items = listOf(
-                RecipeVisualItem(Color(0xFFFFCC66), Alignment.Center, 0.48f, 1.85f, 999),
-                RecipeVisualItem(Color(0xFF4CAF50), Alignment.TopStart, 0.14f),
-                RecipeVisualItem(Color(0xFFE85D5D), Alignment.CenterEnd, 0.12f)
-            )
-        )
-        "salad" in text -> RecipeVisualStyle(
-            label = "Salad bowl",
-            background = Color(0xFFEAF8E7),
-            items = listOf(
-                RecipeVisualItem(Color(0xFF66BB6A), Alignment.Center, 0.48f),
-                RecipeVisualItem(Color(0xFFE85D5D), Alignment.TopEnd, 0.12f),
-                RecipeVisualItem(Color(0xFFFFF176), Alignment.BottomStart, 0.11f)
-            )
-        )
-        "soup" in text -> RecipeVisualStyle(
-            label = "Soup bowl",
-            background = Color(0xFFFFF0E6),
-            items = listOf(
-                RecipeVisualItem(Color(0xFFE8793E), Alignment.Center, 0.46f),
-                RecipeVisualItem(Color(0xFF66BB6A), Alignment.TopStart, 0.1f),
-                RecipeVisualItem(Color(0xFFFFD54F), Alignment.BottomEnd, 0.11f)
-            )
-        )
-        "pasta" in text -> RecipeVisualStyle(
-            label = "Pasta",
-            background = Color(0xFFFFF8DF),
-            items = listOf(
-                RecipeVisualItem(Color(0xFFFFD166), Alignment.Center, 0.5f, 1.35f, 999),
-                RecipeVisualItem(Color(0xFFD94F45), Alignment.CenterEnd, 0.15f),
-                RecipeVisualItem(Color(0xFF4CAF50), Alignment.TopStart, 0.11f)
-            )
-        )
-        "quesadilla" in text -> RecipeVisualStyle(
-            label = "Quesadilla",
-            background = Color(0xFFFFF3D6),
-            items = listOf(
-                RecipeVisualItem(Color(0xFFFFC857), Alignment.Center, 0.52f, 1.55f, 28),
-                RecipeVisualItem(Color(0xFF66BB6A), Alignment.TopEnd, 0.11f),
-                RecipeVisualItem(Color(0xFFD94F45), Alignment.BottomStart, 0.12f)
-            )
-        )
-        "rice" in text || "grain" in text -> RecipeVisualStyle(
-            label = "Rice bowl",
-            background = Color(0xFFF0F7EA),
-            items = listOf(
-                RecipeVisualItem(Color(0xFFFFF8E1), Alignment.Center, 0.48f),
-                RecipeVisualItem(Color(0xFF66BB6A), Alignment.TopEnd, 0.13f),
-                RecipeVisualItem(Color(0xFFE8793E), Alignment.BottomStart, 0.13f)
-            )
-        )
-        "yogurt" in text -> RecipeVisualStyle(
-            label = "Yogurt bowl",
-            background = Color(0xFFF4F1FF),
-            items = listOf(
-                RecipeVisualItem(Color(0xFFFFFFFF), Alignment.Center, 0.46f),
-                RecipeVisualItem(Color(0xFFE85D5D), Alignment.TopEnd, 0.12f),
-                RecipeVisualItem(Color(0xFF8D6E63), Alignment.BottomStart, 0.14f)
-            )
-        )
-        else -> RecipeVisualStyle(
-            label = "Snack plate",
-            background = Color(0xFFEAF8F2),
-            items = listOf(
-                RecipeVisualItem(Color(0xFF66BB6A), Alignment.CenterStart, 0.22f),
-                RecipeVisualItem(Color(0xFFFFD166), Alignment.Center, 0.2f),
-                RecipeVisualItem(Color(0xFFD7A86E), Alignment.CenterEnd, 0.2f)
-            )
-        )
-    }
-}
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RecipeIdeaCard(
@@ -1157,7 +1015,6 @@ private fun RecipeIdeaCard(
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.Top) {
-                RecipeVisualBadge(idea)
                 Column(Modifier.weight(1f)) {
                     Text(idea.title, style = MaterialTheme.typography.titleMedium)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1200,27 +1057,6 @@ private fun RecipeIdeaCard(
     }
 }
 
-@Composable
-private fun RecipeVisualBadge(idea: RecipeIdea) {
-    val style = idea.visualStyle()
-    Box(
-        modifier = Modifier
-            .size(54.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(style.background)
-            .padding(10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(999.dp))
-                .background(style.items.firstOrNull()?.color ?: MaterialTheme.colorScheme.primary)
-        )
-    }
-    Spacer(Modifier.size(10.dp))
-}
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RecipeInfoDialog(
@@ -1246,7 +1082,6 @@ private fun RecipeInfoDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                RecipePreparedVisual(idea, modifier = Modifier.fillMaxWidth())
                 Text("${idea.minutes} minutes - ${idea.servings}")
                 Text(idea.note)
                 Text("For a family: double the listed ingredients for 4+ servings, and add an easy side if needed.", style = MaterialTheme.typography.bodySmall)
