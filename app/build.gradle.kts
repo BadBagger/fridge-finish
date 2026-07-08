@@ -13,8 +13,8 @@ android {
         applicationId = "com.fridgefinish.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 24
-        versionName = "1.23-receipt-ocr-fallback"
+        versionCode = 25
+        versionName = "1.24-launcher-icon-refresh"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
