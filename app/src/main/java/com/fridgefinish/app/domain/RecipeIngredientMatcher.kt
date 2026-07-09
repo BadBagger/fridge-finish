@@ -7,16 +7,17 @@ fun recipeIngredientMatchesFood(
     foodName: String,
     foodCategory: FoodCategory
 ): Boolean {
-    val name = foodName.normalizedFoodText()
+    val classified = IngredientClassifier.classifyName(foodName, foodCategory)
+    val name = classified.normalizedName
     val keywords = ingredientKeywords
         .split(",")
-        .map { it.normalizedFoodText() }
+        .map { normalizeIngredientName(it) }
         .filter { it.length >= 2 }
 
     if (keywords.isEmpty()) return false
 
-    val category = ingredientCategory?.trim()?.uppercase()
-    if (category == FoodCategory.LEFTOVERS.name && foodCategory == FoodCategory.LEFTOVERS) {
+    val expectedCategories = IngredientClassifier.categoryFromRecipeCategory(ingredientCategory)
+    if (IngredientCategory.LEFTOVER in expectedCategories && classified.isLeftover) {
         return true
     }
 
@@ -26,7 +27,11 @@ fun recipeIngredientMatchesFood(
         }
     }
 
-    return keywords.any { keyword -> name.containsWholeFoodTerm(keyword) }
+    if (keywords.any { keyword -> name.containsWholeFoodTerm(keyword) }) return true
+    if (keywords.any { it in genericCategoryKeywords } && expectedCategories.any { it.compatibleWith(classified.category) }) return true
+    if (expectedCategories.isNotEmpty() && !expectedCategories.any { it.compatibleWith(classified.category) }) return false
+
+    return false
 }
 
 private val preparedFoodNames = setOf(
@@ -61,30 +66,27 @@ private val preparedFoodKeywords = setOf(
 private fun String.looksLikePreparedFood(): Boolean =
     preparedFoodNames.any { containsWholeFoodTerm(it) }
 
-private fun String.normalizedFoodText(): String =
-    lowercase()
-        .replace("&", " and ")
-        .replace(Regex("[^a-z0-9]+"), " ")
-        .trim()
+private fun IngredientCategory.compatibleWith(actual: IngredientCategory): Boolean =
+    this == actual ||
+        this == IngredientCategory.PROTEIN && actual == IngredientCategory.LEFTOVER ||
+        this == IngredientCategory.LEFTOVER && actual == IngredientCategory.PROTEIN ||
+        this == IngredientCategory.SAUCE && actual == IngredientCategory.CONDIMENT ||
+        this == IngredientCategory.CONDIMENT && actual == IngredientCategory.SAUCE
 
-private fun String.containsWholeFoodTerm(term: String): Boolean {
-    return foodTermVariants(term).any { variant ->
-        val pattern = Regex("(^|\\s)${Regex.escape(variant)}(\\s|$)")
-        pattern.containsMatchIn(this)
-    }
-}
-
-private fun foodTermVariants(term: String): Set<String> {
-    val clean = term.normalizedFoodText()
-    if (clean.isBlank()) return emptySet()
-
-    val variants = mutableSetOf(clean)
-    variants += when {
-        clean.endsWith("y") -> clean.dropLast(1) + "ies"
-        clean.endsWith("s") -> clean.dropLast(1)
-        else -> clean + "s"
-    }
-    if (clean.endsWith("es")) variants += clean.dropLast(2)
-    if (clean.endsWith("ies")) variants += clean.dropLast(3) + "y"
-    return variants
-}
+private val genericCategoryKeywords = setOf(
+    "protein",
+    "meat",
+    "vegetable",
+    "fruit",
+    "grain",
+    "dairy",
+    "sauce",
+    "condiment",
+    "spice",
+    "snack",
+    "leftover",
+    "frozen",
+    "canned",
+    "baking",
+    "drink"
+)

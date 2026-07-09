@@ -9,6 +9,8 @@ import com.fridgefinish.app.data.BarcodeProduct
 import com.fridgefinish.app.data.FoodItemEntity
 import com.fridgefinish.app.data.ProductLookupRepository
 import com.fridgefinish.app.data.RecipeEntity
+import com.fridgefinish.app.data.RecipeFeedbackAction
+import com.fridgefinish.app.data.RecipeFeedbackEntity
 import com.fridgefinish.app.data.RecipeIngredientEntity
 import com.fridgefinish.app.data.RestockItemEntity
 import com.fridgefinish.app.domain.FoodCategory
@@ -34,6 +36,7 @@ data class FridgeFinishUiState(
     val restock: List<RestockItemEntity> = emptyList(),
     val recipes: List<RecipeEntity> = emptyList(),
     val recipeIngredients: List<RecipeIngredientEntity> = emptyList(),
+    val recipeFeedback: List<RecipeFeedbackEntity> = emptyList(),
     val subscription: FridgeFinishSubscriptionState = FridgeFinishSubscriptionState()
 ) {
     val activeFoods: List<FoodItemEntity> =
@@ -45,7 +48,24 @@ data class FridgeFinishUiState(
     val expiresTodayCount: Int = activeFoods.count { statusOf(it) == FreshnessStatus.EXPIRES_TODAY }
     val eatSoonCount: Int = activeFoods.count { statusOf(it) == FreshnessStatus.EAT_SOON }
     val topPriority: List<FoodItemEntity> = activeFoods.take(8)
+    val leftoversExpiringSoon: List<FoodItemEntity> = activeFoods
+        .filter { it.isLeftover || it.category == FoodCategory.LEFTOVERS }
+        .filterNot { it.itemState == com.fridgefinish.app.domain.FoodItemState.SPOILED }
+        .sortedBy { FreshnessCalculator.urgencyRank(it.expirationDate, it.reminderDaysBefore, it.isFinished) }
+        .take(5)
     val restockOpen: List<RestockItemEntity> = restock.filterNot { it.isPurchased }
+    val hiddenRecipeTitles: List<String> = recipeFeedback
+        .filter { it.action == RecipeFeedbackAction.HIDDEN }
+        .map { it.recipeTitle }
+        .distinct()
+        .sorted()
+    val dislikedIngredients: List<String> = recipeFeedback
+        .filter { it.action == RecipeFeedbackAction.NOT_MY_TASTE }
+        .flatMap { it.ingredients.split(",") }
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .sorted()
 
     fun statusOf(item: FoodItemEntity): FreshnessStatus =
         FreshnessCalculator.status(item.expirationDate, item.reminderDaysBefore, item.isFinished)
@@ -66,7 +86,9 @@ class FridgeFinishViewModel(application: Application) : AndroidViewModel(applica
 
     val uiState: StateFlow<FridgeFinishUiState> = combine(
         combine(repository.foods, repository.restockItems) { foods, restock -> foods to restock },
-        combine(repository.recipes, repository.recipeIngredients) { recipes, ingredients -> recipes to ingredients },
+        combine(repository.recipes, repository.recipeIngredients, repository.recipeFeedback) { recipes, ingredients, feedback ->
+            Triple(recipes, ingredients, feedback)
+        },
         combine(billingGateway.subscriptionTier, billingMessage) { tier, message -> tier to message }
     ) { foodData, recipeData, billingData ->
         val activeItemCount = foodData.first.count { !it.isFinished }
@@ -75,6 +97,7 @@ class FridgeFinishViewModel(application: Application) : AndroidViewModel(applica
             restock = foodData.second,
             recipes = recipeData.first,
             recipeIngredients = recipeData.second,
+            recipeFeedback = recipeData.third,
             subscription = FridgeFinishSubscriptionState(
                 tier = billingData.first,
                 activeItemCount = activeItemCount,
@@ -106,6 +129,22 @@ class FridgeFinishViewModel(application: Application) : AndroidViewModel(applica
 
     fun deleteRestock(item: RestockItemEntity) {
         viewModelScope.launch { repository.deleteRestock(item) }
+    }
+
+    fun saveRecipeFeedback(feedback: RecipeFeedbackEntity) {
+        viewModelScope.launch { repository.saveRecipeFeedback(feedback) }
+    }
+
+    fun deleteRecipeFeedback(feedback: RecipeFeedbackEntity) {
+        viewModelScope.launch { repository.deleteRecipeFeedback(feedback) }
+    }
+
+    fun clearRecipeFeedback() {
+        viewModelScope.launch { repository.clearRecipeFeedback() }
+    }
+
+    fun unhideRecipe(title: String) {
+        viewModelScope.launch { repository.unhideRecipe(title) }
     }
 
     fun addSampleData() {
@@ -157,6 +196,7 @@ class FridgeFinishViewModel(application: Application) : AndroidViewModel(applica
             name = "",
             category = category,
             location = resolvedLocation,
+            dateCooked = if (category == FoodCategory.LEFTOVERS) today else null,
             expirationDate = expires,
             reminderDaysBefore = FreshnessCalculator.defaultReminderDays(category)
         )

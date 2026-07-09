@@ -44,6 +44,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -110,6 +111,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -119,9 +121,12 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fridgefinish.app.data.FoodItemEntity
 import com.fridgefinish.app.data.RecipeEntity
+import com.fridgefinish.app.data.RecipeFeedbackAction
+import com.fridgefinish.app.data.RecipeFeedbackEntity
 import com.fridgefinish.app.data.RecipeIngredientEntity
 import com.fridgefinish.app.data.RestockItemEntity
 import com.fridgefinish.app.domain.FoodCategory
+import com.fridgefinish.app.domain.FoodItemState
 import com.fridgefinish.app.domain.FoodLocation
 import com.fridgefinish.app.domain.FreshnessCalculator
 import com.fridgefinish.app.domain.FreshnessStatus
@@ -129,12 +134,23 @@ import com.fridgefinish.app.domain.DateTextParser
 import com.fridgefinish.app.domain.ReceiptImportCandidate
 import com.fridgefinish.app.domain.ReceiptTextParser
 import com.fridgefinish.app.domain.CookingTool
+import com.fridgefinish.app.domain.CookingConfidence
+import com.fridgefinish.app.domain.DietaryStyle
 import com.fridgefinish.app.domain.RecipeFilter
-import com.fridgefinish.app.domain.RecipeSuggestionEngine
+import com.fridgefinish.app.domain.RecipeAllergen
+import com.fridgefinish.app.domain.LocalTemplateRecipeGenerator
+import com.fridgefinish.app.domain.RecipeGeneratorInput
+import com.fridgefinish.app.domain.RecipeSuggestion
 import com.fridgefinish.app.domain.RecipeSuggestionPreferences
+import com.fridgefinish.app.domain.SpiceLevel
+import com.fridgefinish.app.domain.TemplateRecipeSuggestion
 import com.fridgefinish.app.domain.cleanShoppingName
+import com.fridgefinish.app.domain.containsWholeFoodTerm
+import com.fridgefinish.app.domain.normalizeIngredientName
 import com.fridgefinish.app.domain.missingItemsNotAlreadyInShop
 import com.fridgefinish.app.domain.recipeIngredientMatchesFood
+import com.fridgefinish.app.domain.isAgedLeftover
+import com.fridgefinish.app.domain.isHighRiskFood
 import com.fridgefinish.app.subscription.FeatureGateResult
 import com.fridgefinish.app.subscription.FridgeFinishFeatureGate
 import com.fridgefinish.app.subscription.FridgeFinishPlans
@@ -196,6 +212,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
     var screen by rememberSaveable { mutableStateOf(Screen.TODAY) }
     var editingFood by remember { mutableStateOf<FoodItemEntity?>(null) }
     var addingFood by remember { mutableStateOf<FoodItemEntity?>(null) }
+    var useItFirstFood by remember { mutableStateOf<FoodItemEntity?>(null) }
     var upgradePrompt by remember { mutableStateOf<FeatureGateResult.UpgradeRequired?>(null) }
     var shopMessage by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -232,6 +249,8 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                     title = {
                         if (editingFood != null || addingFood != null) {
                             Text("Food item")
+                        } else if (useItFirstFood != null) {
+                            Text("Use this first")
                         } else {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -248,14 +267,14 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                 )
             },
             floatingActionButton = {
-                if (editingFood == null && addingFood == null && screen !in listOf(Screen.RESTOCK, Screen.SETTINGS, Screen.PLUS, Screen.SCAN, Screen.RECEIPT_SCAN)) {
+                if (editingFood == null && addingFood == null && useItFirstFood == null && screen !in listOf(Screen.RESTOCK, Screen.SETTINGS, Screen.PLUS, Screen.SCAN, Screen.RECEIPT_SCAN)) {
                     FloatingActionButton(onClick = { addFoodIfAllowed(viewModel.presetFood(FoodCategory.OTHER)) }) {
                         Icon(Icons.Default.Add, contentDescription = "Add food")
                     }
                 }
             },
             bottomBar = {
-                if (editingFood == null && addingFood == null) {
+                if (editingFood == null && addingFood == null && useItFirstFood == null) {
                     NavigationBar {
                         listOf(Screen.TODAY, Screen.FRIDGE, Screen.RECIPES, Screen.RESTOCK, Screen.SETTINGS).forEach { item ->
                             NavigationBarItem(
@@ -288,6 +307,55 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                 color = MaterialTheme.colorScheme.background
             ) {
                 when {
+                    useItFirstFood != null -> UseItFirstScreen(
+                        item = useItFirstFood!!,
+                        uiState = uiState,
+                        onBack = { useItFirstFood = null },
+                        onCookRecipe = { idea ->
+                            shopMessage = "Opened ${idea.title}. Review dates before cooking."
+                        },
+                        onSaveRecipe = { idea ->
+                            shopMessage = "Saved ${idea.title} for later."
+                        },
+                        onMarkItemUsed = {
+                            viewModel.markFinished(useItFirstFood!!, addToRestock = false)
+                            useItFirstFood = null
+                        },
+                        onMarkRecipeUsed = { idea ->
+                            uiState.activeFoods
+                                .filter { it.id in idea.usedFoodIds }
+                                .forEach { viewModel.markFinished(it, addToRestock = false) }
+                            useItFirstFood = null
+                        },
+                        onFreezeInstead = {
+                            val item = useItFirstFood!!
+                            viewModel.saveFood(
+                                item.copy(
+                                    location = FoodLocation.FREEZER,
+                                    expirationDate = maxOf(item.expirationDate, LocalDate.now().plusMonths(3)),
+                                    notes = listOfNotNull(item.notes, "Moved to freezer from Use It First. Check before eating.").joinToString("\n")
+                                )
+                            )
+                            useItFirstFood = null
+                        },
+                        onAddMissingToRestock = { idea ->
+                            missingItemsNotAlreadyInShop(
+                                missingItems = idea.missing,
+                                openShopItems = uiState.restock.filterNot { it.isPurchased }.map { it.name }
+                            ).itemsToAdd.forEach { missing ->
+                                viewModel.saveRestock(
+                                    RestockItemEntity(
+                                        name = missing,
+                                        category = missing.inferShoppingCategory(),
+                                        note = "For ${idea.title}. ${idea.servings}.",
+                                        quantity = "Recipe item"
+                                    )
+                                )
+                            }
+                            useItFirstFood = null
+                            screen = Screen.RESTOCK
+                        }
+                    )
                     editingFood != null || addingFood != null -> FoodEditorScreen(
                         initial = editingFood ?: addingFood!!,
                         subscriptionState = uiState.subscription,
@@ -327,7 +395,9 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                             screen = Screen.SCAN
                         },
                         onEdit = { editingFood = it },
-                        onFinish = { viewModel.markFinished(it) }
+                        onFinish = { viewModel.markFinished(it) },
+                        onMarkLeftoverUsed = { viewModel.markFinished(it, addToRestock = false) },
+                        onUseFirst = { useItFirstFood = it }
                     )
                     screen in storageScreens -> FoodListScreen(
                         location = screen.toLocation(),
@@ -339,11 +409,14 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                         },
                         onOpenPlus = { screen = Screen.PLUS },
                         onFinish = { viewModel.markFinished(it) },
-                        onDelete = viewModel::deleteFood
+                        onDelete = viewModel::deleteFood,
+                        onUseFirst = { useItFirstFood = it }
                     ) { editingFood = it }
                     screen == Screen.RECIPES -> RecipeIdeasScreen(
                         uiState = uiState,
                         onOpenPlus = { screen = Screen.PLUS },
+                        onUseItFirst = { useItFirstFood = it },
+                        onSaveRecipeFeedback = viewModel::saveRecipeFeedback,
                         onMarkIngredientsUsed = { idea ->
                             uiState.activeFoods
                                 .filter { it.id in idea.usedFoodIds }
@@ -390,9 +463,22 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                     )
                     screen == Screen.SETTINGS -> SettingsScreen(
                         subscriptionState = uiState.subscription,
+                        recipeFeedback = uiState.recipeFeedback,
+                        hiddenRecipeTitles = uiState.hiddenRecipeTitles,
+                        dislikedIngredients = uiState.dislikedIngredients,
                         onOpenPlus = { screen = Screen.PLUS },
                         onRestorePurchases = viewModel::restorePlusPurchases,
-                        onAddSamples = viewModel::addSampleData
+                        onAddSamples = viewModel::addSampleData,
+                        onResetRecipeFeedback = viewModel::clearRecipeFeedback,
+                        onUnhideRecipe = viewModel::unhideRecipe,
+                        onClearDislikedIngredient = { ingredient ->
+                            uiState.recipeFeedback
+                                .filter { feedback ->
+                                    feedback.action == RecipeFeedbackAction.NOT_MY_TASTE &&
+                                        feedback.ingredients.split(",").any { it.trim().equals(ingredient, ignoreCase = true) }
+                                }
+                                .forEach(viewModel::deleteRecipeFeedback)
+                        }
                     )
                     screen == Screen.PLUS -> FridgeFinishPlusScreen(
                         subscriptionState = uiState.subscription,
@@ -464,7 +550,9 @@ private fun TodayScreen(
     onAddRestock: () -> Unit,
     onScanBarcode: () -> Unit,
     onEdit: (FoodItemEntity) -> Unit,
-    onFinish: (FoodItemEntity) -> Unit
+    onFinish: (FoodItemEntity) -> Unit,
+    onMarkLeftoverUsed: (FoodItemEntity) -> Unit,
+    onUseFirst: (FoodItemEntity) -> Unit
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
@@ -491,9 +579,18 @@ private fun TodayScreen(
                 OutlinedButton(onClick = onAddRestock, modifier = Modifier.weight(1f)) { Text("Restock") }
             }
         }
-        section("Eat first", uiState.topPriority.filter { uiState.statusOf(it) in listOf(FreshnessStatus.EXPIRED, FreshnessStatus.EAT_SOON) }, uiState, onEdit, onFinish)
-        section("Expires today", uiState.activeFoods.filter { uiState.statusOf(it) == FreshnessStatus.EXPIRES_TODAY }, uiState, onEdit, onFinish)
-        section("Coming up", uiState.activeFoods.filter { uiState.statusOf(it) == FreshnessStatus.FRESH }.take(5), uiState, onEdit, onFinish)
+        item {
+            LeftoverRescueCard(
+                leftovers = uiState.leftoversExpiringSoon,
+                uiState = uiState,
+                onAddLeftovers = onAddLeftovers,
+                onRescue = onUseFirst,
+                onMarkUsed = onMarkLeftoverUsed
+            )
+        }
+        section("Eat first", uiState.topPriority.filter { uiState.statusOf(it) in listOf(FreshnessStatus.EXPIRED, FreshnessStatus.EAT_SOON) }, uiState, onEdit, onFinish, onUseFirst)
+        section("Expires today", uiState.activeFoods.filter { uiState.statusOf(it) == FreshnessStatus.EXPIRES_TODAY }, uiState, onEdit, onFinish, onUseFirst)
+        section("Coming up", uiState.activeFoods.filter { uiState.statusOf(it) == FreshnessStatus.FRESH }.take(5), uiState, onEdit, onFinish, onUseFirst)
         item {
             RestockPreviewCard(uiState)
         }
@@ -537,6 +634,76 @@ private fun TodayHeroCard(uiState: FridgeFinishUiState) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun LeftoverRescueCard(
+    leftovers: List<FoodItemEntity>,
+    uiState: FridgeFinishUiState,
+    onAddLeftovers: () -> Unit,
+    onRescue: (FoodItemEntity) -> Unit,
+    onMarkUsed: (FoodItemEntity) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Rescue leftovers", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                    Text(
+                        if (leftovers.isEmpty()) "Track cooked food here before it gets forgotten." else "${leftovers.size} leftover item${if (leftovers.size == 1) "" else "s"} to use soon.",
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                OutlinedButton(onClick = onAddLeftovers) { Text("Add") }
+            }
+            if (leftovers.isEmpty()) {
+                Text(
+                    "Save the date cooked, amount, and use-by date so Fridge Finish can suggest wraps, bowls, soups, scrambles, and other easy rescues.",
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            } else {
+                leftovers.take(3).forEach { item ->
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.78f))
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.weight(1f)) {
+                                Text(item.name.cleanShoppingName(), style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    "${uiState.statusOf(item).label} - ${FreshnessCalculator.daysRemainingText(item.expirationDate)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                item.sourceMeal?.takeIf { it.isNotBlank() }?.let {
+                                    Text("From $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            TextButton(onClick = { onMarkUsed(item) }) { Text("Used") }
+                        }
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            leftoverRescueIdeaLabels(item).take(4).forEach { idea ->
+                                AssistChip(onClick = { onRescue(item) }, label = { Text(idea, maxLines = 1, overflow = TextOverflow.Ellipsis) })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun RestockPreviewCard(uiState: FridgeFinishUiState) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -565,7 +732,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.section(
     foodItems: List<FoodItemEntity>,
     uiState: FridgeFinishUiState,
     onEdit: (FoodItemEntity) -> Unit,
-    onFinish: (FoodItemEntity) -> Unit
+    onFinish: (FoodItemEntity) -> Unit,
+    onUseFirst: (FoodItemEntity) -> Unit
 ) {
     item {
         SectionHeader(title, foodItems.size)
@@ -574,7 +742,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.section(
         }
     }
     items(foodItems, key = { "$title-${it.id}" }) { item ->
-        FoodCard(item, uiState.statusOf(item), onEdit, onFinish, onDelete = null)
+        FoodCard(item, uiState.statusOf(item), onEdit, onFinish, onUseFirst, onDelete = null)
     }
 }
 
@@ -627,6 +795,7 @@ private fun FoodListScreen(
     onOpenPlus: () -> Unit,
     onFinish: (FoodItemEntity) -> Unit,
     onDelete: (FoodItemEntity) -> Unit,
+    onUseFirst: (FoodItemEntity) -> Unit,
     onEdit: (FoodItemEntity) -> Unit
 ) {
     var search by rememberSaveable { mutableStateOf("") }
@@ -708,7 +877,7 @@ private fun FoodListScreen(
             }
         }
         items(foods, key = { it.id }) { item ->
-            FoodCard(item, uiState.statusOf(item), onEdit, onFinish, onDelete)
+            FoodCard(item, uiState.statusOf(item), onEdit, onFinish, onUseFirst, onDelete)
         }
     }
 }
@@ -772,12 +941,14 @@ private fun EmptyStorageCard(location: FoodLocation, subscriptionState: FridgeFi
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FoodCard(
     item: FoodItemEntity,
     status: FreshnessStatus,
     onEdit: (FoodItemEntity) -> Unit,
     onFinish: (FoodItemEntity) -> Unit,
+    onUseFirst: (FoodItemEntity) -> Unit,
     onDelete: ((FoodItemEntity) -> Unit)?
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -802,6 +973,16 @@ private fun FoodCard(
                 }
                 StatusChip(status)
             }
+            if (item.itemState != FoodItemState.FRESH || item.location == FoodLocation.FREEZER) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    AssistChip(onClick = {}, label = { Text(item.effectiveItemState().label) })
+                    if (item.itemState == FoodItemState.SPOILED) {
+                        AssistChip(onClick = {}, label = { Text("Dispose") })
+                    } else if (item.itemState == FoodItemState.QUESTIONABLE) {
+                        AssistChip(onClick = {}, label = { Text("Use only if still safe") })
+                    }
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Expires ${item.expirationDate}", style = MaterialTheme.typography.bodyMedium)
@@ -812,6 +993,11 @@ private fun FoodCard(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                if (status in listOf(FreshnessStatus.EXPIRED, FreshnessStatus.EXPIRES_TODAY, FreshnessStatus.EAT_SOON)) {
+                    Button(onClick = { onUseFirst(item) }, modifier = Modifier.weight(1f)) {
+                        Text("Use first")
+                    }
+                }
                 OutlinedButton(onClick = { onFinish(item) }, modifier = Modifier.weight(1f)) {
                     Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("Finished")
@@ -857,6 +1043,7 @@ private data class RecipeIdea(
     val missing: List<String>,
     val urgentCount: Int,
     val matchScore: Int,
+    val scoreReasons: List<String>,
     val whySuggested: String,
     val difficulty: String,
     val filters: Set<RecipeFilter>,
@@ -867,10 +1054,165 @@ private data class RecipeIdea(
     val steps: String
 )
 
+private enum class RecipeSortOption(val label: String) {
+    BEST_MATCH("Best match"),
+    EXPIRING_SOON("Expiring soon"),
+    FEWEST_MISSING("Fewest missing ingredients"),
+    FASTEST("Fastest"),
+    MOST_INGREDIENTS_USED("Most ingredients used")
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun UseItFirstScreen(
+    item: FoodItemEntity,
+    uiState: FridgeFinishUiState,
+    onBack: () -> Unit,
+    onCookRecipe: (RecipeIdea) -> Unit,
+    onSaveRecipe: (RecipeIdea) -> Unit,
+    onMarkItemUsed: () -> Unit,
+    onMarkRecipeUsed: (RecipeIdea) -> Unit,
+    onFreezeInstead: () -> Unit,
+    onAddMissingToRestock: (RecipeIdea) -> Unit
+) {
+    val status = uiState.statusOf(item)
+    val ideas = remember(item, uiState.activeFoods, uiState.recipes, uiState.recipeIngredients) {
+        buildUseItFirstRecipeIdeas(item, uiState)
+    }
+    val quickIdeas = remember(item) { quickUseItFirstIdeas(item) }
+    var selectedRecipe by remember { mutableStateOf<RecipeIdea?>(null) }
+    var savedTitles by remember { mutableStateOf(emptySet<String>()) }
+    var hiddenTitles by remember { mutableStateOf(emptySet<String>()) }
+    var hiddenMissingIngredients by remember { mutableStateOf(emptySet<String>()) }
+    var message by remember { mutableStateOf<String?>(null) }
+    val visibleIdeas = ideas
+        .filterNot { it.title in hiddenTitles }
+        .filterNot { idea -> idea.missing.any { normalizeIngredientName(it) in hiddenMissingIngredients } }
+
+    selectedRecipe?.let { idea ->
+        RecipeInfoDialog(
+            idea = idea,
+            onDismiss = { selectedRecipe = null },
+            onAddMissingToRestock = {
+                selectedRecipe = null
+                onAddMissingToRestock(idea)
+            }
+        )
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        contentPadding = PaddingValues(bottom = 96.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+            ) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(item.name.cleanShoppingName(), style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AssistChip(onClick = {}, label = { Text(status.label) })
+                        AssistChip(onClick = {}, label = { Text(FreshnessCalculator.daysRemainingText(item.expirationDate)) })
+                        item.quantity?.takeIf { it.isNotBlank() }?.let { quantity ->
+                            AssistChip(onClick = {}, label = { Text("Qty $quantity ${item.unit.orEmpty()}".trim()) })
+                        }
+                    }
+                    Text(
+                        "Recipes below are centered on this item first, then ranked by how many other foods you already have.",
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        "Dates are reminders, not safety guarantees. Check before eating.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+        }
+        message?.let { current ->
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                ) {
+                    Text(current, modifier = Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onSecondaryContainer)
+                }
+            }
+        }
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Quick ideas", style = MaterialTheme.typography.titleMedium)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        quickIdeas.forEach { idea ->
+                            AssistChip(onClick = {}, label = { Text(idea) })
+                        }
+                    }
+                    if (canSuggestFreezing(item)) {
+                        Text("If you cannot use it today, freezing can buy time for many foods. Label it and check it later.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = onMarkItemUsed) { Text("Mark item used") }
+                        if (canSuggestFreezing(item)) {
+                            OutlinedButton(onClick = onFreezeInstead) { Text("Freeze it instead") }
+                        }
+                        OutlinedButton(onClick = onBack) { Text("Dismiss") }
+                    }
+                }
+            }
+        }
+        item {
+            SectionHeader("Suggested meals", visibleIdeas.size)
+            if (visibleIdeas.isEmpty()) {
+                EmptyRecipeCard("No matching meal template yet. Use a quick idea above, or add a pantry staple like rice, tortillas, pasta, eggs, or broth.")
+            }
+        }
+        items(visibleIdeas, key = { "use-first-${item.id}-${it.title}" }) { idea ->
+            RecipeIdeaCard(
+                idea = idea,
+                isSaved = idea.title in savedTitles,
+                onCookThis = {
+                    selectedRecipe = idea
+                    onCookRecipe(idea)
+                },
+                onSaveRecipe = {
+                    savedTitles = savedTitles + idea.title
+                    message = "Saved ${idea.title} for later."
+                    onSaveRecipe(idea)
+                },
+                onHide = {
+                    hiddenTitles = hiddenTitles + idea.title
+                    message = "Dismissed ${idea.title}."
+                },
+                onFeedback = { action ->
+                    message = idea.feedbackMessage(action)
+                },
+                onMarkIngredientsUsed = { onMarkRecipeUsed(idea) },
+                onAddMissingToRestock = onAddMissingToRestock,
+                onReplaceMissingIngredient = { _, missing ->
+                    message = "Try replacing ${missing.cleanShoppingName()} with a similar item you already have, then review the recipe."
+                },
+                onHideMissingIngredient = { missing ->
+                    hiddenMissingIngredients = hiddenMissingIngredients + normalizeIngredientName(missing)
+                    message = "Hid recipes missing ${missing.cleanShoppingName()}."
+                },
+                onMoreInfo = { selectedRecipe = idea }
+            )
+        }
+    }
+}
+
 @Composable
 private fun RecipeIdeasScreen(
     uiState: FridgeFinishUiState,
     onOpenPlus: () -> Unit,
+    onUseItFirst: (FoodItemEntity) -> Unit,
+    onSaveRecipeFeedback: (RecipeFeedbackEntity) -> Unit,
     onMarkIngredientsUsed: (RecipeIdea) -> Unit,
     onAddMissingToRestock: (RecipeIdea) -> Unit
 ) {
@@ -886,14 +1228,46 @@ private fun RecipeIdeasScreen(
     var selectedTools by remember { mutableStateOf(emptySet<CookingTool>()) }
     var maxMinutes by remember { mutableStateOf<Int?>(null) }
     var hiddenTitles by remember { mutableStateOf(emptySet<String>()) }
+    var hiddenMissingIngredients by remember { mutableStateOf(emptySet<String>()) }
     var savedTitles by remember { mutableStateOf(emptySet<String>()) }
+    var selectedSort by remember { mutableStateOf(RecipeSortOption.BEST_MATCH) }
+    var assumePantryStaples by rememberSaveable { mutableStateOf(true) }
+    var includeExpiredItems by rememberSaveable { mutableStateOf(false) }
+    var avoidIngredientsText by rememberSaveable { mutableStateOf("") }
+    var favoriteIngredientsText by rememberSaveable { mutableStateOf("") }
+    var dietaryStyle by rememberSaveable { mutableStateOf(DietaryStyle.NO_PREFERENCE) }
+    var allergensToAvoid by remember { mutableStateOf(emptySet<RecipeAllergen>()) }
+    var spiceLevel by rememberSaveable { mutableStateOf(SpiceLevel.MILD) }
+    var cookingConfidence by rememberSaveable { mutableStateOf(CookingConfidence.COMFORTABLE) }
     var recipeMessage by remember { mutableStateOf<String?>(null) }
-    val preferences = RecipeSuggestionPreferences(selectedFilters, maxMinutes, selectedTools)
-    val ideas = remember(uiState.activeFoods, uiState.recipes, uiState.recipeIngredients, selectedFilters, selectedTools, maxMinutes, hiddenTitles) {
-        buildRecipeIdeas(uiState, preferences).filterNot { it.title in hiddenTitles }
+    val persistedHiddenTitles = uiState.hiddenRecipeTitles.toSet()
+    val allHiddenTitles = hiddenTitles + persistedHiddenTitles
+    val preferences = RecipeSuggestionPreferences(
+        filters = selectedFilters,
+        maxMinutes = maxMinutes,
+        tools = selectedTools,
+        blockedIngredients = avoidIngredientsText.toPreferenceTerms(),
+        favoriteIngredients = favoriteIngredientsText.toPreferenceTerms(),
+        dietaryStyle = dietaryStyle,
+        allergensToAvoid = allergensToAvoid,
+        spiceLevel = spiceLevel,
+        cookingConfidence = cookingConfidence,
+        recentlyHiddenTitles = allHiddenTitles,
+        assumePantryStaples = assumePantryStaples,
+        includeExpiredItems = includeExpiredItems
+    )
+    val ideas = remember(uiState.activeFoods, uiState.recipes, uiState.recipeIngredients, uiState.recipeFeedback, selectedFilters, selectedTools, maxMinutes, allHiddenTitles, hiddenMissingIngredients, selectedSort, assumePantryStaples, includeExpiredItems, avoidIngredientsText, favoriteIngredientsText, dietaryStyle, allergensToAvoid, spiceLevel, cookingConfidence) {
+        buildRecipeIdeas(uiState, preferences)
+            .filterNot { it.title in allHiddenTitles }
+            .filterNot { idea -> idea.missing.any { normalizeIngredientName(it) in hiddenMissingIngredients } }
+            .sortedByOption(selectedSort)
     }
-    val readyIdeas = ideas.filter { it.missing.isEmpty() }
-    val almostIdeas = ideas.filter { it.missing.isNotEmpty() }
+    val expiringItems = uiState.activeFoods
+        .filter { uiState.statusOf(it) in listOf(FreshnessStatus.EXPIRES_TODAY, FreshnessStatus.EAT_SOON, FreshnessStatus.EXPIRED) }
+        .filterNot { it.itemState == FoodItemState.SPOILED }
+        .take(12)
+    val unsafeOnly = uiState.activeFoods.isNotEmpty() &&
+        uiState.activeFoods.all { it.itemState == FoodItemState.SPOILED || it.effectiveItemState() == FoodItemState.EXPIRED }
     var selectedRecipe by remember { mutableStateOf<RecipeIdea?>(null) }
     selectedRecipe?.let { idea ->
         RecipeInfoDialog(
@@ -902,45 +1276,61 @@ private fun RecipeIdeasScreen(
             onAddMissingToRestock = {
                 selectedRecipe = null
                 onAddMissingToRestock(idea)
+            },
+            onMarkIngredientsUsed = {
+                onMarkIngredientsUsed(idea)
+                recipeMessage = "Marked matched ingredients used."
+                selectedRecipe = null
+            },
+            onSaveRecipe = {
+                savedTitles = savedTitles + idea.title
+                onSaveRecipeFeedback(idea.toFeedback(RecipeFeedbackAction.SAVED))
+                recipeMessage = "Saved ${idea.title} for later."
+                selectedRecipe = null
             }
         )
     }
     LazyColumn(
         Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = PaddingValues(bottom = 96.dp)
     ) {
         item {
-            RecipeHeroCard(
-                ideas = ideas,
-                uiState = uiState,
-                onOpenRecipe = { selectedRecipe = it }
+            RecipeScreenHeader(
+                ideaCount = ideas.size,
+                expiringCount = expiringItems.size
             )
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                RecipeMetricCard("Ready", readyIdeas.size, Modifier.weight(1f))
-                RecipeMetricCard("Almost", almostIdeas.size, Modifier.weight(1f))
-                RecipeMetricCard("Eat soon", ideas.count { it.urgentCount > 0 }, Modifier.weight(1f))
-            }
-        }
-        item {
-            RecipePreferenceCard(
+            SmartRecipeFilters(
                 selectedFilters = selectedFilters,
                 onToggleFilter = { filter ->
                     selectedFilters = if (filter in selectedFilters) selectedFilters - filter else selectedFilters + filter
                 },
-                maxMinutes = maxMinutes,
-                onMaxMinutesSelected = { maxMinutes = it },
-                selectedTools = selectedTools,
-                onToggleTool = { tool ->
-                    selectedTools = if (tool in selectedTools) selectedTools - tool else selectedTools + tool
+                selectedSort = selectedSort,
+                onUseExpiringFirst = {
+                    selectedSort = if (selectedSort == RecipeSortOption.EXPIRING_SOON) RecipeSortOption.BEST_MATCH else RecipeSortOption.EXPIRING_SOON
                 },
-                onClear = {
-                    selectedFilters = emptySet()
-                    selectedTools = emptySet()
-                    maxMinutes = null
+                onFewestMissing = {
+                    selectedSort = if (selectedSort == RecipeSortOption.FEWEST_MISSING) RecipeSortOption.BEST_MATCH else RecipeSortOption.FEWEST_MISSING
+                },
+                quickMealSelected = maxMinutes == 15 && RecipeFilter.QUICK in selectedFilters,
+                onToggleQuickMeal = {
+                    if (maxMinutes == 15 && RecipeFilter.QUICK in selectedFilters) {
+                        maxMinutes = null
+                        selectedFilters = selectedFilters - RecipeFilter.QUICK
+                    } else {
+                        maxMinutes = 15
+                        selectedFilters = selectedFilters + RecipeFilter.QUICK
+                    }
                 }
+            )
+        }
+        item {
+            ExpiringIngredientStrip(
+                items = expiringItems,
+                uiState = uiState,
+                onUseItFirst = onUseItFirst
             )
         }
         recipeMessage?.let { message ->
@@ -954,16 +1344,14 @@ private fun RecipeIdeasScreen(
             }
         }
         item {
-            MealPlanCard(
-                ideas = ideas,
-                onOpenRecipe = { selectedRecipe = it }
-            )
+            SectionHeader("Recipe suggestions", ideas.size)
+            when {
+                uiState.activeFoods.isEmpty() -> EmptyRecipeCard("Add groceries to get recipe ideas.")
+                unsafeOnly -> EmptyRecipeCard("No safe recipe suggestions from current items.")
+                ideas.isEmpty() -> EmptyRecipeCard("Try allowing pantry staples or adding one missing ingredient.")
+            }
         }
-        item {
-            SectionHeader("Ready now", readyIdeas.size)
-            if (readyIdeas.isEmpty()) EmptyRecipeCard("No ready recipes yet. Add a few staple items or scan food you already have.")
-        }
-        items(readyIdeas, key = { "ready-${it.title}" }) { idea ->
+        items(ideas, key = { "recipe-${it.title}" }) { idea ->
             RecipeIdeaCard(
                 idea = idea,
                 isSaved = idea.title in savedTitles,
@@ -973,47 +1361,138 @@ private fun RecipeIdeasScreen(
                 },
                 onSaveRecipe = {
                     savedTitles = savedTitles + idea.title
+                    onSaveRecipeFeedback(idea.toFeedback(RecipeFeedbackAction.SAVED))
                     recipeMessage = "Saved ${idea.title} for later."
                 },
                 onHide = {
                     hiddenTitles = hiddenTitles + idea.title
+                    onSaveRecipeFeedback(idea.toFeedback(RecipeFeedbackAction.HIDDEN))
                     recipeMessage = "Hid ${idea.title}."
+                },
+                onFeedback = { action ->
+                    onSaveRecipeFeedback(idea.toFeedback(action))
+                    recipeMessage = idea.feedbackMessage(action)
                 },
                 onMarkIngredientsUsed = {
                     onMarkIngredientsUsed(idea)
                     recipeMessage = "Marked matched ingredients used."
                 },
                 onAddMissingToRestock = onAddMissingToRestock,
+                onReplaceMissingIngredient = { _, missing ->
+                    recipeMessage = "Try replacing ${missing.cleanShoppingName()} with a similar item you already have."
+                },
+                onHideMissingIngredient = { missing ->
+                    hiddenMissingIngredients = hiddenMissingIngredients + normalizeIngredientName(missing)
+                    recipeMessage = "Hid recipes missing ${missing.cleanShoppingName()}."
+                },
                 onMoreInfo = { selectedRecipe = idea }
             )
         }
-        item {
-            SectionHeader("Almost there", almostIdeas.size)
-            if (almostIdeas.isEmpty()) EmptyRecipeCard("No almost-ready ideas right now.")
+    }
+}
+
+@Composable
+private fun RecipeScreenHeader(ideaCount: Int, expiringCount: Int) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("What can I make?", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            when {
+                ideaCount > 0 && expiringCount > 0 -> "$ideaCount ideas, with $expiringCount eat-soon item${if (expiringCount == 1) "" else "s"} to prioritize."
+                ideaCount > 0 -> "$ideaCount ideas from what you already track."
+                else -> "Recipe ideas get better as you add groceries."
+            },
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SmartRecipeFilters(
+    selectedFilters: Set<RecipeFilter>,
+    onToggleFilter: (RecipeFilter) -> Unit,
+    selectedSort: RecipeSortOption,
+    onUseExpiringFirst: () -> Unit,
+    onFewestMissing: () -> Unit,
+    quickMealSelected: Boolean,
+    onToggleQuickMeal: () -> Unit
+) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = selectedSort == RecipeSortOption.EXPIRING_SOON,
+            onClick = onUseExpiringFirst,
+            label = { Text("Use expiring first") }
+        )
+        FilterChip(
+            selected = quickMealSelected,
+            onClick = onToggleQuickMeal,
+            label = { Text("Quick meal") }
+        )
+        FilterChip(
+            selected = RecipeFilter.DINNER in selectedFilters,
+            onClick = { onToggleFilter(RecipeFilter.DINNER) },
+            label = { Text("Dinner") }
+        )
+        FilterChip(
+            selected = RecipeFilter.NO_COOK in selectedFilters,
+            onClick = { onToggleFilter(RecipeFilter.NO_COOK) },
+            label = { Text("No-cook") }
+        )
+        FilterChip(
+            selected = selectedSort == RecipeSortOption.FEWEST_MISSING,
+            onClick = onFewestMissing,
+            label = { Text("Fewest missing items") }
+        )
+        FilterChip(
+            selected = RecipeFilter.LEFTOVER_RESCUE in selectedFilters,
+            onClick = { onToggleFilter(RecipeFilter.LEFTOVER_RESCUE) },
+            label = { Text("Leftovers") }
+        )
+    }
+}
+
+@Composable
+private fun ExpiringIngredientStrip(
+    items: List<FoodItemEntity>,
+    uiState: FridgeFinishUiState,
+    onUseItFirst: (FoodItemEntity) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Use soon", style = MaterialTheme.typography.titleMedium)
+        if (items.isEmpty()) {
+            EmptyRecipeCard("No eat-soon ingredients right now.")
+        } else {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(items, key = { "expiring-${it.id}" }) { item ->
+                    ExpiringIngredientChip(
+                        item = item,
+                        status = uiState.statusOf(item),
+                        onClick = { onUseItFirst(item) }
+                    )
+                }
+            }
         }
-        items(almostIdeas, key = { "almost-${it.title}" }) { idea ->
-            RecipeIdeaCard(
-                idea = idea,
-                isSaved = idea.title in savedTitles,
-                onCookThis = {
-                    selectedRecipe = idea
-                    recipeMessage = "Opened ${idea.title}. Add missing items first if needed."
-                },
-                onSaveRecipe = {
-                    savedTitles = savedTitles + idea.title
-                    recipeMessage = "Saved ${idea.title} for later."
-                },
-                onHide = {
-                    hiddenTitles = hiddenTitles + idea.title
-                    recipeMessage = "Hid ${idea.title}."
-                },
-                onMarkIngredientsUsed = {
-                    onMarkIngredientsUsed(idea)
-                    recipeMessage = "Marked matched ingredients used."
-                },
-                onAddMissingToRestock = onAddMissingToRestock,
-                onMoreInfo = { selectedRecipe = idea }
-            )
+    }
+}
+
+@Composable
+private fun ExpiringIngredientChip(
+    item: FoodItemEntity,
+    status: FreshnessStatus,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .widthIn(min = 132.dp, max = 190.dp)
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(item.name.cleanShoppingName(), style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(status.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            item.quantity?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }
@@ -1027,6 +1506,24 @@ private fun RecipePreferenceCard(
     onMaxMinutesSelected: (Int?) -> Unit,
     selectedTools: Set<CookingTool>,
     onToggleTool: (CookingTool) -> Unit,
+    selectedSort: RecipeSortOption,
+    onSortSelected: (RecipeSortOption) -> Unit,
+    assumePantryStaples: Boolean,
+    onAssumePantryStaplesChanged: (Boolean) -> Unit,
+    includeExpiredItems: Boolean,
+    onIncludeExpiredItemsChanged: (Boolean) -> Unit,
+    avoidIngredientsText: String,
+    onAvoidIngredientsTextChanged: (String) -> Unit,
+    favoriteIngredientsText: String,
+    onFavoriteIngredientsTextChanged: (String) -> Unit,
+    dietaryStyle: DietaryStyle,
+    onDietaryStyleSelected: (DietaryStyle) -> Unit,
+    allergensToAvoid: Set<RecipeAllergen>,
+    onToggleAllergen: (RecipeAllergen) -> Unit,
+    spiceLevel: SpiceLevel,
+    onSpiceLevelSelected: (SpiceLevel) -> Unit,
+    cookingConfidence: CookingConfidence,
+    onCookingConfidenceSelected: (CookingConfidence) -> Unit,
     onClear: () -> Unit
 ) {
     Card(
@@ -1069,6 +1566,117 @@ private fun RecipePreferenceCard(
                         selected = tool in selectedTools,
                         onClick = { onToggleTool(tool) },
                         label = { Text(tool.label) }
+                    )
+                }
+            }
+            Text("Sort by", style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                RecipeSortOption.entries.forEach { option ->
+                    FilterChip(
+                        selected = selectedSort == option,
+                        onClick = { onSortSelected(option) },
+                        label = { Text(option.label) }
+                    )
+                }
+            }
+            Text("Taste preferences", style = MaterialTheme.typography.labelLarge)
+            OutlinedTextField(
+                value = avoidIngredientsText,
+                onValueChange = onAvoidIngredientsTextChanged,
+                label = { Text("Avoid ingredients") },
+                placeholder = { Text("mushrooms, olives") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = favoriteIngredientsText,
+                onValueChange = onFavoriteIngredientsTextChanged,
+                label = { Text("Favorite ingredients") },
+                placeholder = { Text("chicken, rice, cheddar") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            Text("Dietary style", style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                DietaryStyle.entries.forEach { style ->
+                    FilterChip(
+                        selected = dietaryStyle == style,
+                        onClick = { onDietaryStyleSelected(style) },
+                        label = { Text(style.label) }
+                    )
+                }
+            }
+            Text("Allergens to avoid", style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                RecipeAllergen.entries.forEach { allergen ->
+                    FilterChip(
+                        selected = allergen in allergensToAvoid,
+                        onClick = { onToggleAllergen(allergen) },
+                        label = { Text(allergen.label) }
+                    )
+                }
+            }
+            Text("Spice level", style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SpiceLevel.entries.forEach { level ->
+                    FilterChip(
+                        selected = spiceLevel == level,
+                        onClick = { onSpiceLevelSelected(level) },
+                        label = { Text(level.label) }
+                    )
+                }
+            }
+            Text("Cooking confidence", style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                CookingConfidence.entries.forEach { confidence ->
+                    FilterChip(
+                        selected = cookingConfidence == confidence,
+                        onClick = { onCookingConfidenceSelected(confidence) },
+                        label = { Text(confidence.label) }
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onAssumePantryStaplesChanged(!assumePantryStaples) }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Checkbox(
+                    checked = assumePantryStaples,
+                    onCheckedChange = onAssumePantryStaplesChanged
+                )
+                Column(Modifier.weight(1f)) {
+                    Text("Assume basic pantry staples", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        "Salt, pepper, oil, butter, sugar, flour, and common spices will not count as missing.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onIncludeExpiredItemsChanged(!includeExpiredItems) }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Checkbox(
+                    checked = includeExpiredItems,
+                    onCheckedChange = onIncludeExpiredItemsChanged
+                )
+                Column(Modifier.weight(1f)) {
+                    Text("Include expired items in suggestions", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        "Off by default. Past-date foods only appear with caution copy when this is on.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -1207,88 +1815,94 @@ private fun RecipeIdeaCard(
     onCookThis: () -> Unit,
     onSaveRecipe: () -> Unit,
     onHide: () -> Unit,
+    onFeedback: (RecipeFeedbackAction) -> Unit,
     onMarkIngredientsUsed: () -> Unit,
     onAddMissingToRestock: (RecipeIdea) -> Unit,
+    onReplaceMissingIngredient: (RecipeIdea, String) -> Unit,
+    onHideMissingIngredient: (String) -> Unit,
     onMoreInfo: () -> Unit
 ) {
     Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Column(Modifier.weight(1f)) {
-                    Text(idea.title, style = MaterialTheme.typography.titleMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Timer, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Text("${idea.minutes} min")
-                        Text(idea.difficulty)
-                        Text("${idea.matchScore}% match", color = MaterialTheme.colorScheme.primary)
-                    }
+                    Text(idea.title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(idea.whySuggested, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (idea.urgentCount > 0) {
-                    AssistChip(onClick = {}, label = { Text("Uses eat soon") })
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (idea.matchScore >= 80) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    Text(
+                        "${idea.matchScore}%",
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (idea.matchScore >= 80) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
-            Text(idea.whySuggested, style = MaterialTheme.typography.bodyMedium)
-            Text("${idea.servings}. ${idea.note}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            RecipeTagRow(idea)
+
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                RecipeInfoPill(Icons.Default.Timer, "${idea.minutes} min")
+                RecipeInfoPill(Icons.Default.Restaurant, idea.difficulty)
+                RecipeInfoPill(Icons.Default.Check, "Uses ${idea.have.size + idea.optional.size}")
+                RecipeInfoPill(Icons.Default.ShoppingCart, if (idea.missing.isEmpty()) "Nothing missing" else "Missing ${idea.missing.size}")
+            }
+
             if (idea.expiringSoon.isNotEmpty()) {
-                Text("Use soon", style = MaterialTheme.typography.labelLarge)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    idea.expiringSoon.forEach {
-                        AssistChip(onClick = {}, label = { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) })
-                    }
-                }
+                Text(
+                    "Saves ${idea.expiringSoon.first().cleanShoppingName()} ${if (idea.urgentCount > 1) "and ${idea.urgentCount - 1} more" else ""}",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else {
+                Text(idea.missingSummary(), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
-            Text("Ingredients used", style = MaterialTheme.typography.labelLarge)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                idea.have.take(6).forEach {
-                    AssistChip(onClick = {}, label = { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) })
-                }
-            }
-            if (idea.optional.isNotEmpty()) {
-                Text("Optional ingredients you have", style = MaterialTheme.typography.labelLarge)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    idea.optional.take(4).forEach {
-                        AssistChip(onClick = {}, label = { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) })
-                    }
-                }
-            }
-            if (idea.missing.isNotEmpty()) {
-                Text("Missing ingredients", style = MaterialTheme.typography.labelLarge)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    idea.missing.forEach {
-                        AssistChip(onClick = {}, label = { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) })
-                    }
-                }
-                Button(onClick = { onAddMissingToRestock(idea) }, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.ShoppingCart, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text("Add missing to Shop")
-                }
-            }
-            Text(idea.safetyNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            RecipeBadgeRow(idea)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onCookThis) { Text("Cook this") }
                 OutlinedButton(onClick = onSaveRecipe, enabled = !isSaved) { Text(if (isSaved) "Saved" else "Save recipe") }
-                OutlinedButton(onClick = onHide) { Text("Hide") }
-                OutlinedButton(onClick = onMarkIngredientsUsed, enabled = idea.usedFoodIds.isNotEmpty()) { Text("Mark used") }
                 TextButton(onClick = onMoreInfo) {
                     Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text("More info")
+                    Text("Details")
                 }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { onFeedback(RecipeFeedbackAction.COOKED) }) { Text("Cooked it") }
+                TextButton(onClick = onHide) { Text("Hide") }
+                TextButton(onClick = { onFeedback(RecipeFeedbackAction.BAD_SUGGESTION) }) { Text("Bad suggestion") }
             }
         }
     }
 }
 
+@Composable
+private fun RecipeInfoPill(icon: ImageVector, text: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun RecipeTagRow(idea: RecipeIdea) {
+private fun RecipeBadgeRow(idea: RecipeIdea) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        AssistChip(onClick = {}, label = { Text(idea.servings) })
-        idea.filters.take(3).forEach { filter ->
-            AssistChip(onClick = {}, label = { Text(filter.label) })
+        if (idea.minutes <= 15 || RecipeFilter.QUICK in idea.filters) {
+            AssistChip(onClick = {}, label = { Text("Quick") })
         }
-        idea.tools.take(2).forEach { tool ->
-            AssistChip(onClick = {}, label = { Text(tool.label) })
+        if (RecipeFilter.NO_COOK in idea.filters || CookingTool.NO_TOOLS in idea.tools) {
+            AssistChip(onClick = {}, label = { Text("No-cook") })
+        }
+        if (RecipeFilter.LEFTOVER_RESCUE in idea.filters || idea.have.any { it.contains("leftover", ignoreCase = true) }) {
+            AssistChip(onClick = {}, label = { Text("Uses leftovers") })
+        }
+        if (RecipeFilter.ONE_PAN in idea.filters) {
+            AssistChip(onClick = {}, label = { Text("One-pan") })
+        }
+        if (idea.matchScore >= 80) {
+            AssistChip(onClick = {}, label = { Text("High match") })
         }
     }
 }
@@ -1298,16 +1912,14 @@ private fun RecipeTagRow(idea: RecipeIdea) {
 private fun RecipeInfoDialog(
     idea: RecipeIdea,
     onDismiss: () -> Unit,
-    onAddMissingToRestock: () -> Unit
+    onAddMissingToRestock: () -> Unit,
+    onMarkIngredientsUsed: () -> Unit = {},
+    onSaveRecipe: () -> Unit = {}
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            if (idea.missing.isNotEmpty()) {
-                TextButton(onClick = onAddMissingToRestock) { Text("Add missing") }
-            } else {
-                TextButton(onClick = onDismiss) { Text("Done") }
-            }
+            TextButton(onClick = onSaveRecipe) { Text("Save recipe") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Close") }
@@ -1320,78 +1932,427 @@ private fun RecipeInfoDialog(
             ) {
                 Text("${idea.matchScore}% match - ${idea.minutes} minutes - ${idea.difficulty} - ${idea.servings}")
                 Text(idea.whySuggested)
+                if (idea.scoreReasons.isNotEmpty()) {
+                    Text("Why this score", style = MaterialTheme.typography.labelLarge)
+                    idea.scoreReasons.forEach { reason -> Text(reason) }
+                }
                 Text(idea.note)
-                Text("Tools", style = MaterialTheme.typography.labelLarge)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    idea.tools.forEach { AssistChip(onClick = {}, label = { Text(it.label) }) }
+                RecipeIngredientGroup("You have", idea.have)
+                RecipeIngredientGroup("Use soon", idea.expiringSoon)
+                if (idea.optional.isNotEmpty()) {
+                    RecipeIngredientGroup("Optional", idea.optional)
+                }
+                if (idea.missing.isNotEmpty()) {
+                    RecipeIngredientGroup("Missing", idea.missing)
+                }
+                Text("Steps", style = MaterialTheme.typography.labelLarge)
+                idea.detailSteps().forEachIndexed { index, step ->
+                    Text("${index + 1}. $step")
+                }
+                Text("Substitutions", style = MaterialTheme.typography.labelLarge)
+                idea.substitutionIdeas().forEach { substitution ->
+                    Text(substitution)
                 }
                 Text("Portions", style = MaterialTheme.typography.labelLarge)
                 idea.portions.forEach { portion ->
                     Text(portion)
                 }
                 Text("For a family: double the portions for 4+ servings, or add a simple side if you are short on one ingredient.", style = MaterialTheme.typography.bodySmall)
-                if (idea.expiringSoon.isNotEmpty()) {
-                    Text("Use first", style = MaterialTheme.typography.labelLarge)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        idea.expiringSoon.forEach { AssistChip(onClick = {}, label = { Text(it) }) }
-                    }
-                }
-                Text("Owned ingredients", style = MaterialTheme.typography.labelLarge)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    idea.have.take(6).forEach { AssistChip(onClick = {}, label = { Text(it) }) }
-                }
-                if (idea.optional.isNotEmpty()) {
-                    Text("Optional ingredients you have", style = MaterialTheme.typography.labelLarge)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        idea.optional.forEach { AssistChip(onClick = {}, label = { Text(it) }) }
-                    }
+                Text(idea.safetyNote, style = MaterialTheme.typography.bodySmall)
+                Button(
+                    onClick = onMarkIngredientsUsed,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = idea.usedFoodIds.isNotEmpty()
+                ) {
+                    Text("Mark ingredients used")
                 }
                 if (idea.missing.isNotEmpty()) {
-                    Text("Need to buy", style = MaterialTheme.typography.labelLarge)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        idea.missing.forEach { AssistChip(onClick = {}, label = { Text(it) }) }
+                    OutlinedButton(onClick = onAddMissingToRestock, modifier = Modifier.fillMaxWidth()) {
+                        Text(idea.addMissingButtonLabel())
                     }
                 }
-                Text("Steps", style = MaterialTheme.typography.labelLarge)
-                idea.detailSteps().forEachIndexed { index, step ->
-                    Text("${index + 1}. $step")
-                }
-                Text(idea.safetyNote, style = MaterialTheme.typography.bodySmall)
             }
         }
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RecipeIngredientGroup(title: String, items: List<String>) {
+    Text(title, style = MaterialTheme.typography.labelLarge)
+    if (items.isEmpty()) {
+        Text("None", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    } else {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            items.distinct().forEach { item ->
+                AssistChip(onClick = {}, label = { Text(item.cleanShoppingName(), maxLines = 1, overflow = TextOverflow.Ellipsis) })
+            }
+        }
+    }
+}
+
 private fun buildRecipeIdeas(
     uiState: FridgeFinishUiState,
     preferences: RecipeSuggestionPreferences = RecipeSuggestionPreferences()
-): List<RecipeIdea> =
-    RecipeSuggestionEngine.buildSuggestions(
-        foods = uiState.activeFoods,
-        recipes = uiState.recipes,
-        ingredients = uiState.recipeIngredients,
-        preferences = preferences
-    ).map { suggestion ->
-        val recipe = suggestion.recipe
+): List<RecipeIdea> {
+    val expiringItems = uiState.activeFoods.filter { item ->
+        uiState.statusOf(item) in listOf(FreshnessStatus.EXPIRES_TODAY, FreshnessStatus.EAT_SOON, FreshnessStatus.EXPIRED)
+    }
+    val suggestions = LocalTemplateRecipeGenerator().generate(
+        RecipeGeneratorInput(
+            inventoryItems = uiState.activeFoods,
+            expiringItems = expiringItems,
+            userPreferences = preferences,
+            availableTimeMinutes = preferences.maxMinutes,
+            mealTypes = preferences.filters,
+            cookingTools = preferences.tools,
+            assumePantryStaples = preferences.assumePantryStaples,
+            dietaryRestrictions = preferences.dietaryRestrictions,
+            feedbackHistory = uiState.recipeFeedback,
+            recipes = uiState.recipes,
+            recipeIngredients = uiState.recipeIngredients
+        )
+    )
+    return suggestions.map { suggestion ->
         RecipeIdea(
-            title = recipe.title,
-            minutes = recipe.minutes,
-            servings = recipe.estimatedServings(),
-            portions = recipe.portionGuidance(),
-            have = suggestion.requiredMatchedFoods.map { it.name.ifBlank { it.category.label }.cleanShoppingName() }.distinct(),
-            expiringSoon = suggestion.expiringSoonFoods.map { it.name.cleanShoppingName() }.distinct(),
-            optional = suggestion.optionalMatchedFoods.map { it.name.cleanShoppingName() }.distinct(),
-            missing = suggestion.missingRequired.map { it.shoppingLabel() }.distinct(),
-            urgentCount = suggestion.expiringSoonFoods.size,
+            title = suggestion.title,
+            minutes = suggestion.estimatedTimeMinutes,
+            servings = suggestion.estimatedServings(),
+            portions = suggestion.portionGuidance(),
+            have = suggestion.ingredientsOwned,
+            expiringSoon = suggestion.ingredientsExpiringSoon,
+            optional = suggestion.ingredientsOptional,
+            missing = suggestion.ingredientsMissing,
+            urgentCount = suggestion.ingredientsExpiringSoon.size,
             matchScore = suggestion.matchScore,
-            whySuggested = suggestion.whySuggested,
+            scoreReasons = suggestion.scoreReasons,
+            whySuggested = suggestion.explanation,
             difficulty = suggestion.difficulty,
             filters = suggestion.filters,
             tools = suggestion.tools,
-            safetyNote = suggestion.safetyNote,
+            safetyNote = suggestion.safetyWarnings.firstOrNull() ?: suggestion.safetyNote,
             usedFoodIds = suggestion.usedFoods.map { it.id },
-            note = recipe.description,
-            steps = recipe.steps
+            note = suggestion.summary,
+            steps = suggestion.steps.joinToString(". ")
+        )
+    }
+        .map { it.applyRecipeFeedback(uiState.recipeFeedback) }
+        .sortedByOption(RecipeSortOption.BEST_MATCH)
+}
+
+private val negativeRecipeFeedbackActions = setOf(
+    RecipeFeedbackAction.HIDDEN,
+    RecipeFeedbackAction.TOO_MANY_MISSING,
+    RecipeFeedbackAction.NOT_MY_TASTE,
+    RecipeFeedbackAction.TOO_MUCH_WORK,
+    RecipeFeedbackAction.BAD_SUGGESTION
+)
+
+private fun RecipeIdea.applyRecipeFeedback(feedback: List<RecipeFeedbackEntity>): RecipeIdea {
+    if (feedback.isEmpty()) return this
+    val format = mealFormat()
+    val exactFeedback = feedback.filter { it.recipeTitle.equals(title, ignoreCase = true) }
+    val positiveExact = exactFeedback.count { it.action == RecipeFeedbackAction.COOKED || it.action == RecipeFeedbackAction.SAVED }
+    val negativeExact = exactFeedback.count { it.action in negativeRecipeFeedbackActions }
+    val cookedFormatCount = feedback.count { it.mealFormat == format && it.action == RecipeFeedbackAction.COOKED }
+    val rejectedFormatCount = feedback.count { it.mealFormat == format && it.action in negativeRecipeFeedbackActions }
+    val hiddenSimilarCount = feedback.count {
+        it.action == RecipeFeedbackAction.HIDDEN &&
+            !it.recipeTitle.equals(title, ignoreCase = true) &&
+            it.recipeTitle.isSimilarRecipeTitle(title)
+    }
+
+    var delta = 0
+    val learningReasons = mutableListOf<String>()
+    if (positiveExact > 0) {
+        delta += (positiveExact * 10).coerceAtMost(20)
+        learningReasons += "Boosted because you saved or cooked this before"
+    }
+    if (cookedFormatCount > 0) {
+        delta += (cookedFormatCount * 4).coerceAtMost(12)
+        learningReasons += "Matches meal formats you cook often"
+    }
+    if (negativeExact > 0) {
+        delta -= (negativeExact * 15).coerceAtMost(35)
+        learningReasons += "Lowered because you rejected this suggestion before"
+    }
+    if (rejectedFormatCount >= 2) {
+        delta -= 20
+        learningReasons += "Lowered because similar meal formats were rejected"
+    }
+    if (hiddenSimilarCount > 0) {
+        delta -= 15
+        learningReasons += "Lowered because it is similar to a hidden recipe"
+    }
+
+    return copy(
+        matchScore = (matchScore + delta).coerceIn(0, 100),
+        scoreReasons = (learningReasons + scoreReasons).distinct()
+    )
+}
+
+private fun RecipeIdea.toFeedback(action: RecipeFeedbackAction): RecipeFeedbackEntity =
+    RecipeFeedbackEntity(
+        recipeTitle = title,
+        mealFormat = mealFormat(),
+        action = action,
+        ingredients = (have + expiringSoon + optional + missing)
+            .map { it.cleanShoppingName() }
+            .distinct()
+            .joinToString(",")
+    )
+
+private fun RecipeIdea.feedbackMessage(action: RecipeFeedbackAction): String =
+    when (action) {
+        RecipeFeedbackAction.COOKED -> "Got it. Similar ${mealFormat()} ideas will rank higher."
+        RecipeFeedbackAction.SAVED -> "Saved ${title} for later."
+        RecipeFeedbackAction.HIDDEN -> "Hid ${title}."
+        RecipeFeedbackAction.TOO_MANY_MISSING -> "Got it. Recipes with too many missing items will rank lower."
+        RecipeFeedbackAction.NOT_MY_TASTE -> "Got it. Similar ingredients and recipes will rank lower."
+        RecipeFeedbackAction.TOO_MUCH_WORK -> "Got it. Easier recipes will get priority."
+        RecipeFeedbackAction.BAD_SUGGESTION -> "Got it. This kind of suggestion will rank lower."
+    }
+
+private fun RecipeIdea.mealFormat(): String {
+    val text = title.lowercase()
+    return when {
+        "bowl" in text -> "bowls"
+        listOf("wrap", "quesadilla", "taco", "burrito").any { it in text } -> "wraps"
+        listOf("pasta", "noodle").any { it in text } -> "pasta"
+        "soup" in text -> "soup"
+        "salad" in text -> "salad"
+        listOf("omelet", "scramble", "egg", "breakfast", "smoothie", "yogurt").any { it in text } -> "breakfast"
+        listOf("snack", "plate").any { it in text } -> "snacks"
+        RecipeFilter.ONE_PAN in filters -> "one-pan meals"
+        else -> "other"
+    }
+}
+
+private fun String.isSimilarRecipeTitle(other: String): Boolean {
+    val left = lowercase().split(" ", "-", "/").filter { it.length > 3 }.toSet()
+    val right = other.lowercase().split(" ", "-", "/").filter { it.length > 3 }.toSet()
+    return left.intersect(right).size >= 2
+}
+
+private fun buildUseItFirstRecipeIdeas(
+    item: FoodItemEntity,
+    uiState: FridgeFinishUiState
+): List<RecipeIdea> {
+    val focusedName = normalizeIngredientName(item.name)
+    val focusedSuggestions = buildRecipeIdeas(uiState)
+        .filter { idea ->
+            item.id in idea.usedFoodIds ||
+                (idea.have + idea.expiringSoon + idea.optional).any { label ->
+                    normalizeIngredientName(label).containsWholeFoodTerm(focusedName) ||
+                        focusedName.containsWholeFoodTerm(label)
+                }
+        }
+        .map { idea ->
+            idea.copy(
+                whySuggested = "Built around ${item.name.cleanShoppingName()}. ${idea.whySuggested}",
+                scoreReasons = listOf("Uses ${item.name.cleanShoppingName()} first") + idea.scoreReasons
+            )
+        }
+    val fallbackIdeas = fallbackUseItFirstRecipes(item, uiState)
+    return (focusedSuggestions + fallbackIdeas)
+        .distinctBy { it.title.lowercase() }
+        .sortedWith(
+            compareByDescending<RecipeIdea> { item.id in it.usedFoodIds }
+                .thenByDescending { it.have.count { have -> !normalizeIngredientName(have).containsWholeFoodTerm(focusedName) } + it.optional.size }
+                .thenBy { it.missing.size }
+                .thenByDescending { it.matchScore }
+                .thenBy { it.minutes }
+        )
+}
+
+private fun fallbackUseItFirstRecipes(item: FoodItemEntity, uiState: FridgeFinishUiState): List<RecipeIdea> {
+    val normalized = normalizeIngredientName(item.name)
+    val ownedNames = uiState.activeFoods
+        .filterNot { it.id == item.id }
+        .map { it.name.cleanShoppingName() }
+    val itemName = item.name.cleanShoppingName()
+    val baseSafetyNote = recipeSafetyNote(listOf(item))
+
+    fun idea(
+        title: String,
+        minutes: Int,
+        missing: List<String>,
+        steps: String,
+        filters: Set<RecipeFilter>,
+        tools: Set<CookingTool>,
+        note: String = "A flexible use-first idea centered on $itemName."
+    ): RecipeIdea {
+        val ownedHelpers = missing.mapNotNull { missingItem ->
+            ownedNames.firstOrNull { owned -> normalizeIngredientName(owned).containsWholeFoodTerm(missingItem) }
+        }
+        val score = (72 + ownedHelpers.size * 6 - missing.size * 8).coerceIn(0, 100)
+        return RecipeIdea(
+            title = title,
+            minutes = minutes,
+            servings = if (title.contains("Soup") || title.contains("Pasta") || title.contains("Bowl")) "Serves 2-4" else "Serves 1-2",
+            portions = fallbackPortions(title),
+            have = (listOf(itemName) + ownedHelpers).distinct(),
+            expiringSoon = listOf(itemName),
+            optional = ownedNames.take(2).filterNot { it in ownedHelpers },
+            missing = missing.filterNot { missingItem ->
+                ownedHelpers.any { owned -> normalizeIngredientName(owned).containsWholeFoodTerm(missingItem) }
+            },
+            urgentCount = 1,
+            matchScore = score,
+            scoreReasons = listOf(
+                "Uses $itemName as the main ingredient",
+                "Ranked by other foods you already have"
+            ),
+            whySuggested = note,
+            difficulty = if (minutes <= 15) "Easy" else "Moderate",
+            filters = filters,
+            tools = tools,
+            safetyNote = baseSafetyNote,
+            usedFoodIds = listOf(item.id),
+            note = note,
+            steps = steps
+        )
+    }
+
+    return when {
+        normalized.containsWholeFoodTerm("chicken") -> listOf(
+            idea("Chicken Rice Bowl", 15, listOf("rice", "vegetable", "sauce"), "Warm chicken with rice. Add vegetables. Finish with sauce or seasoning.", setOf(RecipeFilter.LUNCH, RecipeFilter.DINNER, RecipeFilter.QUICK), setOf(CookingTool.MICROWAVE, CookingTool.STOVE)),
+            idea("Chicken Quesadilla", 10, listOf("tortilla", "cheese"), "Add chicken and cheese to a tortilla. Heat until crisp. Serve with sauce if available.", setOf(RecipeFilter.LUNCH, RecipeFilter.DINNER, RecipeFilter.QUICK), setOf(CookingTool.STOVE, CookingTool.MICROWAVE)),
+            idea("Chicken Pasta", 25, listOf("pasta", "sauce"), "Cook pasta. Warm chicken with sauce. Toss together and add cheese if available.", setOf(RecipeFilter.DINNER, RecipeFilter.COMFORT, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.STOVE)),
+            idea("Chicken Caesar Wrap", 10, listOf("greens or vegetables", "tortilla or bread", "dressing"), "Chop chicken. Add greens or vegetables. Wrap or serve over salad with dressing.", setOf(RecipeFilter.LUNCH, RecipeFilter.NO_COOK, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.NO_TOOLS)),
+            idea("Chicken Noodle Soup", 30, listOf("broth", "vegetable", "noodles or rice"), "Simmer broth. Add chicken and vegetables. Add noodles or rice if available.", setOf(RecipeFilter.DINNER, RecipeFilter.COMFORT, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.STOVE))
+        )
+        normalized.containsWholeFoodTerm("rice") -> listOf(
+            idea("Leftover Fried Rice", 15, listOf("egg", "vegetable", "soy sauce"), "Stir-fry rice with vegetables. Add egg or leftover protein if available. Finish with sauce.", setOf(RecipeFilter.LUNCH, RecipeFilter.DINNER, RecipeFilter.QUICK, RecipeFilter.ONE_PAN, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.STOVE)),
+            idea("Leftover Rice Bowl", 10, listOf("protein", "vegetable", "sauce"), "Warm rice, add protein and vegetables, then finish with sauce.", setOf(RecipeFilter.LUNCH, RecipeFilter.DINNER, RecipeFilter.QUICK, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.MICROWAVE, CookingTool.STOVE)),
+            idea("Stuffed Pepper Rice Filling", 30, listOf("bell pepper", "cheese or sauce"), "Mix rice with sauce or cheese, stuff into peppers, and bake or microwave until hot.", setOf(RecipeFilter.DINNER, RecipeFilter.COMFORT, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.OVEN, CookingTool.MICROWAVE)),
+            idea("Rice Soup Add-in", 20, listOf("broth", "vegetable"), "Stir rice into broth with vegetables or leftovers and simmer until hot.", setOf(RecipeFilter.DINNER, RecipeFilter.COMFORT, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.STOVE))
+        )
+        normalized.containsWholeFoodTerm("banana") -> listOf(
+            idea("Banana Smoothie", 5, listOf("milk or yogurt", "frozen fruit"), "Blend banana with milk or yogurt. Add frozen fruit or ice if available.", setOf(RecipeFilter.BREAKFAST, RecipeFilter.SNACK, RecipeFilter.QUICK), setOf(CookingTool.BLENDER)),
+            idea("Banana Pancakes", 15, listOf("egg", "flour or pancake mix"), "Mash banana. Mix with egg and flour or mix. Cook small pancakes until set.", setOf(RecipeFilter.BREAKFAST, RecipeFilter.COMFORT), setOf(CookingTool.STOVE)),
+            idea("Banana Yogurt Bowl", 5, listOf("yogurt", "granola or nuts"), "Slice banana over yogurt. Add granola, nuts, or cereal if available.", setOf(RecipeFilter.BREAKFAST, RecipeFilter.SNACK, RecipeFilter.NO_COOK), setOf(CookingTool.NO_TOOLS))
+        )
+        normalized.containsWholeFoodTerm("spinach") -> listOf(
+            idea("Spinach Omelet", 10, listOf("egg", "cheese"), "Cook spinach briefly. Add eggs. Finish with cheese if available.", setOf(RecipeFilter.BREAKFAST, RecipeFilter.QUICK, RecipeFilter.ONE_PAN), setOf(CookingTool.STOVE)),
+            idea("Spinach Salad", 10, listOf("protein", "dressing"), "Use spinach as the base. Add protein, cheese, or dressing if available.", setOf(RecipeFilter.LUNCH, RecipeFilter.NO_COOK, RecipeFilter.HEALTHY), setOf(CookingTool.NO_TOOLS)),
+            idea("Spinach Pasta Add-in", 20, listOf("pasta", "sauce"), "Cook pasta. Stir spinach into warm sauce until wilted. Toss together.", setOf(RecipeFilter.DINNER), setOf(CookingTool.STOVE)),
+            idea("Spinach Smoothie", 5, listOf("fruit", "milk or yogurt"), "Blend spinach with fruit and milk or yogurt until smooth.", setOf(RecipeFilter.BREAKFAST, RecipeFilter.SNACK, RecipeFilter.HEALTHY), setOf(CookingTool.BLENDER)),
+            idea("Spinach Soup Add-in", 30, listOf("broth", "protein or beans"), "Simmer broth and protein or beans. Stir spinach in at the end.", setOf(RecipeFilter.DINNER, RecipeFilter.COMFORT), setOf(CookingTool.STOVE))
+        )
+        normalized.containsWholeFoodTerm("vegetable") || normalized.containsWholeFoodTerm("veggie") -> listOf(
+            idea("Leftover Vegetable Omelet", 10, listOf("egg", "cheese"), "Warm vegetables briefly, add eggs, and cook until set.", setOf(RecipeFilter.BREAKFAST, RecipeFilter.QUICK, RecipeFilter.ONE_PAN, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.STOVE)),
+            idea("Vegetable Pasta Add-in", 20, listOf("pasta", "sauce"), "Warm vegetables in sauce, then toss with cooked pasta.", setOf(RecipeFilter.DINNER, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.STOVE)),
+            idea("Leftover Vegetable Soup", 25, listOf("broth", "protein or beans"), "Simmer vegetables with broth and add beans or protein if available.", setOf(RecipeFilter.DINNER, RecipeFilter.COMFORT, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.STOVE)),
+            idea("Vegetable Stir Fry", 15, listOf("rice or noodles", "sauce"), "Stir-fry vegetables quickly and serve with rice, noodles, or sauce.", setOf(RecipeFilter.LUNCH, RecipeFilter.DINNER, RecipeFilter.QUICK, RecipeFilter.ONE_PAN, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.STOVE))
+        )
+        item.category == FoodCategory.LEFTOVERS || item.isLeftover -> listOf(
+            idea("${itemName} Wrap", 10, listOf("tortilla or bread", "cheese or sauce"), "Warm the leftover if needed, wrap it with cheese, greens, or sauce.", setOf(RecipeFilter.LUNCH, RecipeFilter.QUICK, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.NO_TOOLS, CookingTool.MICROWAVE)),
+            idea("${itemName} Bowl", 12, listOf("rice or grain", "vegetable"), "Serve the leftover over rice, pasta, potatoes, or greens with a quick sauce.", setOf(RecipeFilter.LUNCH, RecipeFilter.DINNER, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.MICROWAVE, CookingTool.STOVE)),
+            idea("${itemName} Sandwich or Melt", 10, listOf("bread", "cheese or sauce"), "Layer the leftover on bread. Toast with cheese or serve cold with sauce if appropriate.", setOf(RecipeFilter.LUNCH, RecipeFilter.QUICK, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.NO_TOOLS, CookingTool.STOVE)),
+            idea("${itemName} Quesadilla", 10, listOf("tortilla", "cheese"), "Add the leftover and cheese to a tortilla, then toast until hot.", setOf(RecipeFilter.LUNCH, RecipeFilter.DINNER, RecipeFilter.QUICK, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.STOVE, CookingTool.MICROWAVE)),
+            idea("${itemName} Casserole", 35, listOf("rice, pasta, or potatoes", "cheese or sauce"), "Combine leftovers with a base and sauce, then bake until hot throughout.", setOf(RecipeFilter.DINNER, RecipeFilter.COMFORT, RecipeFilter.LEFTOVER_RESCUE), setOf(CookingTool.OVEN))
+        )
+        item.category == FoodCategory.MEAT -> listOf(
+            idea("${itemName} Rice Bowl", 15, listOf("rice", "vegetable"), "Warm the protein. Serve over rice with vegetables and sauce.", setOf(RecipeFilter.LUNCH, RecipeFilter.DINNER), setOf(CookingTool.MICROWAVE, CookingTool.STOVE)),
+            idea("${itemName} Wrap", 10, listOf("tortilla or bread", "vegetable"), "Layer the protein with vegetables in a wrap or sandwich.", setOf(RecipeFilter.LUNCH, RecipeFilter.QUICK), setOf(CookingTool.NO_TOOLS, CookingTool.MICROWAVE))
+        )
+        item.category == FoodCategory.PRODUCE -> listOf(
+            idea("${itemName} Salad", 10, listOf("protein", "dressing"), "Use it as the main fresh ingredient with protein or dressing.", setOf(RecipeFilter.LUNCH, RecipeFilter.NO_COOK), setOf(CookingTool.NO_TOOLS)),
+            idea("${itemName} Pasta Add-in", 20, listOf("pasta", "sauce"), "Cook pasta and fold this item into the sauce or topping.", setOf(RecipeFilter.DINNER), setOf(CookingTool.STOVE))
+        )
+        else -> listOf(
+            idea("${itemName} Bowl", 15, listOf("rice or pasta", "vegetable"), "Use this item as the main topping over a simple base.", setOf(RecipeFilter.LUNCH, RecipeFilter.DINNER), setOf(CookingTool.MICROWAVE, CookingTool.STOVE))
+        )
+    }
+}
+
+private fun fallbackPortions(title: String): List<String> =
+    when {
+        title.contains("Smoothie") -> listOf("1 serving: 1 banana or 1 cup fruit plus 1 cup liquid.", "2 servings: double fruit and liquid.")
+        title.contains("Pancake") -> listOf("1 serving: 1 banana with 1 egg or enough mix for 2 to 3 small pancakes.", "Family size: make multiple small batches.")
+        title.contains("Soup") -> listOf("1 serving: about 1 1/2 cups soup.", "Family size: add extra broth, vegetables, rice, or noodles.")
+        title.contains("Wrap") || title.contains("Quesadilla") -> listOf("1 serving: 1 wrap or quesadilla.", "Family size: make one per person.")
+        else -> listOf("1 serving: use one normal portion of the main ingredient.", "Family size: double the base and add a side.")
+    }
+
+private fun quickUseItFirstIdeas(item: FoodItemEntity): List<String> {
+    val normalized = normalizeIngredientName(item.name)
+    return when {
+        normalized.containsWholeFoodTerm("chicken") -> listOf("Chicken rice bowl", "Chicken quesadilla", "Chicken pasta", "Chicken Caesar wrap", "Chicken noodle soup")
+        normalized.containsWholeFoodTerm("banana") -> listOf("Smoothie", "Banana pancakes", "Yogurt bowl", "Freeze for later")
+        normalized.containsWholeFoodTerm("spinach") -> listOf("Omelet", "Salad", "Pasta add-in", "Smoothie", "Soup add-in")
+        normalized.containsWholeFoodTerm("rice") -> listOf("Fried rice", "Rice bowl", "Stuffed peppers", "Soup add-in", "Freeze for later")
+        item.category == FoodCategory.LEFTOVERS || item.isLeftover -> leftoverRescueIdeaLabels(item)
+        item.category == FoodCategory.MEAT -> listOf("Rice bowl", "Wrap", "Pasta", "Soup", "Freeze for later")
+        item.category == FoodCategory.PRODUCE -> listOf("Salad", "Omelet add-in", "Pasta add-in", "Soup add-in", "Freeze for later")
+        else -> listOf("Bowl", "Wrap", "Soup add-in", "Snack plate", "Freeze for later")
+    }
+}
+
+private fun leftoverRescueIdeaLabels(item: FoodItemEntity): List<String> {
+    val normalized = normalizeIngredientName(item.name)
+    return when {
+        normalized.containsWholeFoodTerm("chicken") -> listOf("Quesadilla", "Rice bowl", "Caesar wrap", "Noodle soup")
+        normalized.containsWholeFoodTerm("rice") -> listOf("Fried rice", "Rice bowl", "Stuffed peppers", "Soup add-in")
+        normalized.containsWholeFoodTerm("vegetable") || normalized.containsWholeFoodTerm("veggie") -> listOf("Omelet", "Pasta add-in", "Soup", "Stir fry")
+        normalized.containsWholeFoodTerm("pasta") || normalized.containsWholeFoodTerm("noodle") -> listOf("Pasta bake", "Soup add-in", "Skillet", "Casserole")
+        else -> listOf("Wrap", "Bowl", "Sandwich", "Quesadilla", "Salad", "Casserole")
+    }
+}
+
+private fun canSuggestFreezing(item: FoodItemEntity): Boolean =
+    item.location != FoodLocation.FREEZER &&
+        item.category !in setOf(FoodCategory.PANTRY, FoodCategory.CONDIMENTS, FoodCategory.DRINKS, FoodCategory.SNACKS)
+
+private fun FoodItemEntity.effectiveItemState(): FoodItemState =
+    when {
+        itemState == FoodItemState.SPOILED || itemState == FoodItemState.QUESTIONABLE -> itemState
+        location == FoodLocation.FREEZER || itemState == FoodItemState.FROZEN -> FoodItemState.FROZEN
+        itemState != FoodItemState.FRESH -> itemState
+        expirationDate.isBefore(LocalDate.now()) -> FoodItemState.EXPIRED
+        FreshnessCalculator.status(expirationDate, reminderDaysBefore, isFinished) == FreshnessStatus.EAT_SOON -> FoodItemState.USE_SOON
+        else -> FoodItemState.FRESH
+    }
+
+private fun recipeSafetyNote(foods: List<FoodItemEntity>): String {
+    val today = LocalDate.now()
+    return when {
+        foods.any { it.itemState == FoodItemState.SPOILED } -> "Spoiled items are not recipe ingredients. Dispose of them instead."
+        foods.any { it.itemState == FoodItemState.QUESTIONABLE } -> "Use only if still safe. Check smell, texture, and package guidance before using."
+        foods.any { it.expirationDate.isBefore(today) || it.itemState == FoodItemState.EXPIRED } -> "Includes a past-date item. Check smell, texture, and package guidance before using."
+        foods.any { it.isAgedLeftover(today) } -> "Leftovers can become risky after several days. Check smell, texture, date, and reheat thoroughly."
+        foods.any { it.isHighRiskFood() } -> "High-risk foods need extra caution. Check smell, texture, and package guidance before using."
+        else -> "Dates are reminders, not safety guarantees. Check food before eating."
+    }
+}
+
+private fun List<RecipeIdea>.sortedByOption(option: RecipeSortOption): List<RecipeIdea> =
+    when (option) {
+        RecipeSortOption.BEST_MATCH -> sortedWith(
+            compareByDescending<RecipeIdea> { it.matchScore }
+                .thenBy { it.missing.size }
+                .thenBy { it.minutes }
+        )
+        RecipeSortOption.EXPIRING_SOON -> sortedWith(
+            compareByDescending<RecipeIdea> { it.urgentCount }
+                .thenByDescending { it.matchScore }
+                .thenBy { it.missing.size }
+        )
+        RecipeSortOption.FEWEST_MISSING -> sortedWith(
+            compareBy<RecipeIdea> { it.missing.size }
+                .thenByDescending { it.matchScore }
+                .thenBy { it.minutes }
+        )
+        RecipeSortOption.FASTEST -> sortedWith(
+            compareBy<RecipeIdea> { it.minutes }
+                .thenBy { it.missing.size }
+                .thenByDescending { it.matchScore }
+        )
+        RecipeSortOption.MOST_INGREDIENTS_USED -> sortedWith(
+            compareByDescending<RecipeIdea> { it.have.size + it.optional.size }
+                .thenByDescending { it.matchScore }
+                .thenBy { it.missing.size }
         )
     }
 
@@ -1402,6 +2363,80 @@ private fun RecipeEntity.estimatedServings(): String {
         listOf("soup", "pasta", "fried rice", "grain bowl", "salad").any { text.contains(it) } -> "Serves 3-4"
         listOf("omelet", "quesadilla").any { text.contains(it) } -> "Serves 2"
         else -> "Serves 2-3"
+    }
+}
+
+private fun RecipeSuggestion.estimatedServings(): String {
+    val text = title.lowercase()
+    return when {
+        listOf("smoothie", "yogurt", "snack", "scramble", "omelet").any { text.contains(it) } -> "Serves 1-2"
+        listOf("soup", "pasta", "fried rice", "rice bowl", "grain bowl", "stir fry", "salad").any { text.contains(it) } -> "Serves 3-4"
+        listOf("wrap", "quesadilla").any { text.contains(it) } -> "Serves 2"
+        else -> "Serves 2-3"
+    }
+}
+
+private fun RecipeSuggestion.portionGuidance(): List<String> {
+    val text = title.lowercase()
+    return when {
+        text.contains("smoothie") -> listOf(
+            "1 serving: about 1 cup fruit plus 1 cup milk or yogurt if available.",
+            "2 servings: double the fruit and liquid, then blend in batches if needed."
+        )
+        text.contains("scramble") || text.contains("omelet") -> listOf(
+            "1 serving: 2 eggs plus a small handful of vegetables or cheese.",
+            "Family size: use 2 eggs per person and cook in batches."
+        )
+        text.contains("rice bowl") || text.contains("stir fry") || text.contains("fried rice") -> listOf(
+            "1 bowl: about 1 cup cooked rice or noodles, 1/2 cup protein, and 1 cup vegetables.",
+            "Family size: set the base, protein, and toppings out separately."
+        )
+        text.contains("wrap") || text.contains("quesadilla") -> listOf(
+            "1 serving: 1 large tortilla with 1/2 cup filling.",
+            "Family size: build one wrap or quesadilla per person."
+        )
+        text.contains("soup") -> listOf(
+            "1 serving: about 1 1/2 cups soup.",
+            "Family size: add more broth, vegetables, or grains to stretch it."
+        )
+        else -> recipe.portionGuidance()
+    }
+}
+
+private fun TemplateRecipeSuggestion.estimatedServings(): String {
+    val text = title.lowercase()
+    return when {
+        listOf("smoothie", "salad", "scramble", "omelet").any { text.contains(it) } -> "Serves 1-2"
+        listOf("soup", "pasta", "rice bowl", "stir fry").any { text.contains(it) } -> "Serves 3-4"
+        listOf("wrap", "quesadilla").any { text.contains(it) } -> "Serves 2"
+        else -> "Serves 2-3"
+    }
+}
+
+private fun TemplateRecipeSuggestion.portionGuidance(): List<String> {
+    val text = title.lowercase()
+    return when {
+        text.contains("smoothie") -> listOf(
+            "1 serving: about 1 cup fruit plus 1 cup milk or yogurt if available.",
+            "2 servings: double the fruit and liquid, then blend in batches if needed."
+        )
+        text.contains("scramble") || text.contains("omelet") -> listOf(
+            "1 serving: 2 eggs plus a small handful of vegetables or cheese.",
+            "Family size: use 2 eggs per person and cook in batches."
+        )
+        text.contains("rice bowl") || text.contains("stir fry") -> listOf(
+            "1 bowl: about 1 cup cooked rice or noodles, 1/2 cup protein, and 1 cup vegetables.",
+            "Family size: set the base, protein, and toppings out separately."
+        )
+        text.contains("wrap") || text.contains("quesadilla") -> listOf(
+            "1 serving: 1 large tortilla with 1/2 cup filling.",
+            "Family size: build one wrap or quesadilla per person."
+        )
+        text.contains("soup") -> listOf(
+            "1 serving: about 1 1/2 cups soup.",
+            "Family size: add more broth, vegetables, or grains to stretch it."
+        )
+        else -> listOf("Use the listed ingredients as flexible portions and scale up for more servings.")
     }
 }
 
@@ -1466,6 +2501,46 @@ private fun RecipeIdea.detailSteps(): List<String> {
     val scale = "For more servings, double the main ingredients and keep seasoning flexible."
     return (listOf(prep) + baseSteps + scale).distinct()
 }
+
+private fun RecipeIdea.substitutionIdeas(): List<String> {
+    val ideas = mutableListOf<String>()
+    if (missing.isNotEmpty()) {
+        ideas += "Missing ${missing.first().cleanShoppingName()}: use a similar item you already like, or add it to the shopping list."
+    }
+    when (mealFormat()) {
+        "bowls" -> ideas += "Bowls can swap rice, pasta, potatoes, or salad greens as the base."
+        "wraps" -> ideas += "Wraps can use tortillas, bread, lettuce cups, or a bowl format if you are out of wraps."
+        "pasta" -> ideas += "Pasta ideas can use noodles, rice, or cooked potatoes if that is what you have."
+        "soup" -> ideas += "Soup can use broth, water with seasoning, or a canned soup base."
+        "salad" -> ideas += "Salad can use lettuce, spinach, chopped vegetables, or a grain base."
+        "breakfast" -> ideas += "Breakfast ideas can swap milk, yogurt, cheese, or eggs depending on the recipe."
+        "snacks" -> ideas += "Snack plates work with crackers, toast, fruit, vegetables, cheese, hummus, or leftovers."
+        else -> ideas += "Keep the main item, then swap sides and seasonings based on what is already open."
+    }
+    return ideas.distinct()
+}
+
+private fun RecipeIdea.missingSummary(): String =
+    when {
+        missing.isEmpty() && scoreReasons.any { it.contains("pantry basics assumed", ignoreCase = true) } -> "Pantry basics assumed"
+        missing.isEmpty() -> "You have everything needed"
+        missing.size == 1 && have.size >= 2 -> "You have almost everything. Only missing 1 item"
+        missing.size == 1 -> "Only missing 1 item"
+        else -> "Missing ${missing.size} items"
+    }
+
+private fun RecipeIdea.addMissingButtonLabel(): String =
+    if (missing.size == 1) {
+        "Add ${missing.first().cleanShoppingName()} to shopping list"
+    } else {
+        "Add missing items to shopping list"
+    }
+
+private fun String.toPreferenceTerms(): Set<String> =
+    split(",", "\n")
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .toSet()
 
 private fun RecipeIngredientEntity.shoppingLabel(): String {
     val clean = label.trim()
@@ -1533,11 +2608,14 @@ private fun FoodEditorScreen(
     var unit by rememberSaveable(initial.id) { mutableStateOf(initial.unit.orEmpty()) }
     var purchaseDate by rememberSaveable(initial.id) { mutableStateOf(initial.purchaseDate?.toString().orEmpty()) }
     var openedDate by rememberSaveable(initial.id) { mutableStateOf(initial.openedDate?.toString().orEmpty()) }
+    var dateCooked by rememberSaveable(initial.id) { mutableStateOf(initial.dateCooked?.toString().orEmpty()) }
     var expirationDate by rememberSaveable(initial.id) { mutableStateOf(initial.expirationDate.toString()) }
     var reminderDays by rememberSaveable(initial.id) { mutableStateOf(initial.reminderDaysBefore.toString()) }
     var notes by rememberSaveable(initial.id) { mutableStateOf(initial.notes.orEmpty()) }
+    var sourceMeal by rememberSaveable(initial.id) { mutableStateOf(initial.sourceMeal.orEmpty()) }
     var imageUri by rememberSaveable(initial.id) { mutableStateOf(initial.imageUri.orEmpty()) }
     var barcode by rememberSaveable(initial.id) { mutableStateOf(initial.barcode.orEmpty()) }
+    var itemState by rememberSaveable(initial.id) { mutableStateOf(initial.effectiveItemState()) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
     var showDetails by rememberSaveable(initial.id) {
         mutableStateOf(
@@ -1545,6 +2623,8 @@ private fun FoodEditorScreen(
                 unit.isNotBlank() ||
                 purchaseDate.isNotBlank() ||
                 openedDate.isNotBlank() ||
+                dateCooked.isNotBlank() ||
+                sourceMeal.isNotBlank() ||
                 notes.isNotBlank()
         )
     }
@@ -1602,6 +2682,10 @@ private fun FoodEditorScreen(
                                 onClick = {
                                     category = preset
                                     reminderDays = FreshnessCalculator.defaultReminderDays(category).toString()
+                                    if (preset == FoodCategory.LEFTOVERS && dateCooked.isBlank()) {
+                                        dateCooked = LocalDate.now().toString()
+                                        expirationDate = LocalDate.now().plusDays(3).toString()
+                                    }
                                 },
                                 label = { Text(preset.label, maxLines = 1) }
                             )
@@ -1612,6 +2696,14 @@ private fun FoodEditorScreen(
                         SimpleMenu("Category", category.label, FoodCategory.entries.map { it.label }) { label ->
                             category = FoodCategory.fromLabel(label)
                             reminderDays = FreshnessCalculator.defaultReminderDays(category).toString()
+                            if (category == FoodCategory.LEFTOVERS && dateCooked.isBlank()) {
+                                dateCooked = LocalDate.now().toString()
+                                expirationDate = LocalDate.now().plusDays(3).toString()
+                            }
+                        }
+                        SimpleMenu("State", itemState.label, FoodItemState.entries.map { it.label }) { label ->
+                            itemState = FoodItemState.entries.first { it.label == label }
+                            if (itemState == FoodItemState.FROZEN) location = FoodLocation.FREEZER
                         }
                     }
                     if (!subscriptionState.isPlus) {
@@ -1654,6 +2746,17 @@ private fun FoodEditorScreen(
                         }
                         DateInput("Purchase date", purchaseDate) { purchaseDate = it }
                         DateInput("Opened date", openedDate) { openedDate = it }
+                        if (category == FoodCategory.LEFTOVERS || initial.isLeftover) {
+                            DateInput("Date cooked", dateCooked) { dateCooked = it }
+                            OutlinedTextField(
+                                sourceMeal,
+                                { sourceMeal = it },
+                                label = { Text("Source meal") },
+                                placeholder = { Text("Sunday dinner, rotisserie chicken") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
                         if (subscriptionState.isPlus) {
                             OutlinedTextField(reminderDays, { reminderDays = it }, label = { Text("Reminder days before expiration") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(), singleLine = true)
                         }
@@ -1684,6 +2787,7 @@ private fun FoodEditorScreen(
                             unit = unit.takeIf { it.isNotBlank() },
                             purchaseDate = parseDate(purchaseDate),
                             openedDate = parseDate(openedDate),
+                            dateCooked = parseDate(dateCooked),
                             expirationDate = parsedExpiration,
                             reminderDaysBefore = if (subscriptionState.isPlus) {
                                 reminderDays.toIntOrNull()?.coerceAtLeast(0) ?: FreshnessCalculator.defaultReminderDays(category)
@@ -1691,8 +2795,10 @@ private fun FoodEditorScreen(
                                 FreshnessCalculator.defaultReminderDays(category)
                             },
                             notes = notes.takeIf { it.isNotBlank() },
+                            sourceMeal = sourceMeal.takeIf { it.isNotBlank() },
                             imageUri = imageUri.takeIf { it.isNotBlank() },
-                            barcode = barcode.takeIf { it.isNotBlank() }
+                            barcode = barcode.takeIf { it.isNotBlank() },
+                            itemState = itemState
                         )
                     )
                 }, modifier = Modifier.weight(1f)) { Text("Save food") }
@@ -1942,14 +3048,30 @@ private fun RestockCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsScreen(
     subscriptionState: FridgeFinishSubscriptionState,
+    recipeFeedback: List<RecipeFeedbackEntity>,
+    hiddenRecipeTitles: List<String>,
+    dislikedIngredients: List<String>,
     onOpenPlus: () -> Unit,
     onRestorePurchases: () -> Unit,
-    onAddSamples: () -> Unit
+    onAddSamples: () -> Unit,
+    onResetRecipeFeedback: () -> Unit,
+    onUnhideRecipe: (String) -> Unit,
+    onClearDislikedIngredient: (String) -> Unit
 ) {
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    val favoriteFormats = remember(recipeFeedback) {
+        recipeFeedback
+            .filter { it.action == RecipeFeedbackAction.COOKED || it.action == RecipeFeedbackAction.SAVED }
+            .groupingBy { it.mealFormat }
+            .eachCount()
+            .entries
+            .sortedByDescending { it.value }
+            .take(5)
+    }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item {
             SettingsHeroCard(subscriptionState)
@@ -2002,6 +3124,57 @@ private fun SettingsScreen(
             SettingsCard("Testing") {
                 Text("Sample data helps check dashboard, recipes, storage, and shopping flows.")
                 OutlinedButton(onClick = onAddSamples, modifier = Modifier.fillMaxWidth()) { Text("Add sample data") }
+            }
+        }
+        item {
+            SettingsCard("Better suggestions") {
+                Text("Recipe feedback stays on this device and helps rank future suggestions.")
+                if (favoriteFormats.isEmpty()) {
+                    Text("No favorite meal formats yet. Cook or save recipes to train suggestions.", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Text("Favorite meal formats", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        favoriteFormats.forEach { entry ->
+                            AssistChip(onClick = {}, label = { Text("${entry.key} ${entry.value}") })
+                        }
+                    }
+                }
+                Text("Hidden recipes", style = MaterialTheme.typography.labelLarge)
+                if (hiddenRecipeTitles.isEmpty()) {
+                    Text("No hidden recipes.", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    hiddenRecipeTitles.forEach { title ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(title, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            TextButton(onClick = { onUnhideRecipe(title) }) { Text("Unhide") }
+                        }
+                    }
+                }
+                Text("Disliked ingredients", style = MaterialTheme.typography.labelLarge)
+                if (dislikedIngredients.isEmpty()) {
+                    Text("No disliked ingredients yet.", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        dislikedIngredients.forEach { ingredient ->
+                            AssistChip(
+                                onClick = { onClearDislikedIngredient(ingredient) },
+                                label = { Text(ingredient.cleanShoppingName()) }
+                            )
+                        }
+                    }
+                    Text("Tap an ingredient to stop lowering recipes that use it.", style = MaterialTheme.typography.bodySmall)
+                }
+                OutlinedButton(
+                    onClick = onResetRecipeFeedback,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = recipeFeedback.isNotEmpty()
+                ) {
+                    Text("Reset recipe feedback")
+                }
             }
         }
         item {

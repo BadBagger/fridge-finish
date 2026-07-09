@@ -1,8 +1,10 @@
 package com.fridgefinish.app.data
 
 import com.fridgefinish.app.domain.FoodCategory
+import com.fridgefinish.app.domain.FoodItemState
 import com.fridgefinish.app.domain.FoodLocation
 import com.fridgefinish.app.domain.FreshnessCalculator
+import com.fridgefinish.app.domain.IngredientClassifier
 import com.fridgefinish.app.notifications.FoodNotificationScheduler
 import kotlinx.coroutines.flow.Flow
 import java.time.Instant
@@ -12,22 +14,38 @@ class FridgeFinishRepository(
     private val foodDao: FoodDao,
     private val restockDao: RestockDao,
     private val recipeDao: RecipeDao,
+    private val recipeFeedbackDao: RecipeFeedbackDao,
     private val notifications: FoodNotificationScheduler
 ) {
     val foods: Flow<List<FoodItemEntity>> = foodDao.observeAll()
     val restockItems: Flow<List<RestockItemEntity>> = restockDao.observeAll()
     val recipes: Flow<List<RecipeEntity>> = recipeDao.observeRecipes()
     val recipeIngredients: Flow<List<RecipeIngredientEntity>> = recipeDao.observeIngredients()
+    val recipeFeedback: Flow<List<RecipeFeedbackEntity>> = recipeFeedbackDao.observeAll()
 
     fun foodsByLocation(location: FoodLocation): Flow<List<FoodItemEntity>> =
         foodDao.observeByLocation(location)
 
     suspend fun saveFood(item: FoodItemEntity): Long {
         val now = Instant.now()
+        val classified = IngredientClassifier.classify(item, LocalDate.now())
+        val intelligentItem = item.copy(
+            ingredientCategory = classified.category,
+            subcategory = classified.subcategory,
+            isOpened = item.isOpened || item.openedDate != null,
+            isLeftover = classified.isLeftover,
+            itemState = when {
+                item.itemState in setOf(FoodItemState.SPOILED, FoodItemState.QUESTIONABLE, FoodItemState.EXPIRED) -> item.itemState
+                item.location == FoodLocation.FREEZER -> FoodItemState.FROZEN
+                else -> item.itemState
+            },
+            priorityScore = classified.priorityScore,
+            safetyRiskLevel = classified.safetyRiskLevel
+        )
         val id = if (item.id == 0L) {
-            foodDao.insert(item.copy(createdAt = now, updatedAt = now))
+            foodDao.insert(intelligentItem.copy(createdAt = now, updatedAt = now))
         } else {
-            foodDao.update(item.copy(updatedAt = now))
+            foodDao.update(intelligentItem.copy(updatedAt = now))
             item.id
         }
         val saved = foodDao.getById(id)
@@ -68,10 +86,22 @@ class FridgeFinishRepository(
 
     suspend fun deleteRestock(item: RestockItemEntity) = restockDao.delete(item)
 
+    suspend fun saveRecipeFeedback(feedback: RecipeFeedbackEntity): Long =
+        recipeFeedbackDao.insert(feedback)
+
+    suspend fun deleteRecipeFeedback(feedback: RecipeFeedbackEntity) =
+        recipeFeedbackDao.delete(feedback)
+
+    suspend fun clearRecipeFeedback() =
+        recipeFeedbackDao.clearAll()
+
+    suspend fun unhideRecipe(title: String) =
+        recipeFeedbackDao.clearHiddenForTitle(title)
+
     suspend fun addSampleData() {
         val today = LocalDate.now()
         val samples = listOf(
-            FoodItemEntity(name = "Chicken leftovers", category = FoodCategory.LEFTOVERS, location = FoodLocation.FRIDGE, expirationDate = today.plusDays(1), reminderDaysBefore = 2, notes = "Check before eating."),
+            FoodItemEntity(name = "Chicken leftovers", category = FoodCategory.LEFTOVERS, location = FoodLocation.FRIDGE, dateCooked = today.minusDays(2), expirationDate = today.plusDays(1), reminderDaysBefore = 2, quantity = "2", unit = "cups", sourceMeal = "Roast chicken dinner", notes = "Check before eating."),
             FoodItemEntity(name = "Milk", category = FoodCategory.DAIRY, location = FoodLocation.FRIDGE, expirationDate = today.plusDays(4), reminderDaysBefore = FreshnessCalculator.defaultReminderDays(FoodCategory.DAIRY)),
             FoodItemEntity(name = "Lettuce", category = FoodCategory.PRODUCE, location = FoodLocation.FRIDGE, expirationDate = today.plusDays(2), reminderDaysBefore = FreshnessCalculator.defaultReminderDays(FoodCategory.PRODUCE)),
             FoodItemEntity(name = "Frozen pizza", category = FoodCategory.FROZEN, location = FoodLocation.FREEZER, expirationDate = today.plusDays(90), reminderDaysBefore = FreshnessCalculator.defaultReminderDays(FoodCategory.FROZEN)),
@@ -107,7 +137,14 @@ class FridgeFinishRepository(
         seedRecipe("Fried rice idea", 15, "Use rice, eggs, vegetables, and leftovers.", "Stir-fry rice with vegetables and egg or leftovers. Season with sauce or condiments.", "rice:rice:PANTRY", "eggs or leftover protein:egg,leftover,chicken,tofu:LEFTOVERS:optional", "peas, carrots, or peppers:pea,carrot,onion,pepper,spinach:PRODUCE"),
         seedRecipe("Microwave leftover plate", 8, "Fast leftover rescue when you do not want to cook.", "Reheat leftovers until hot, add a pantry side, then add fruit or vegetables if available.", "leftovers:leftover,chicken,meat,pasta:LEFTOVERS", "rice, bread, or crackers:rice,bread,cracker,tortilla:PANTRY:optional", "fruit or vegetables:apple,banana,carrot,lettuce,spinach,tomato:PRODUCE:optional"),
         seedRecipe("Air fryer freezer rescue", 18, "Use freezer items with a quick fresh side.", "Air fry frozen food until hot and crisp. Add salad greens, fruit, or yogurt on the side.", "frozen item:frozen,pizza,nugget,fries:FROZEN", "fresh side:lettuce,spinach,apple,banana,yogurt:PRODUCE:optional"),
-        seedRecipe("Pantry bean tacos", 20, "Use pantry staples with produce and cheese.", "Warm beans or protein with tortillas, then top with cheese, peppers, lettuce, or salsa.", "beans or protein:bean,chicken,leftover,meat:PANTRY", "tortillas:tortilla,wrap:PANTRY", "toppings:cheese,lettuce,pepper,salsa,tomato:PRODUCE:optional")
+        seedRecipe("Pantry bean tacos", 20, "Use pantry staples with produce and cheese.", "Warm beans or protein with tortillas, then top with cheese, peppers, lettuce, or salsa.", "beans or protein:bean,chicken,leftover,meat:PANTRY", "tortillas:tortilla,wrap:PANTRY", "toppings:cheese,lettuce,pepper,salsa,tomato:PRODUCE:optional"),
+        seedRecipe("Protein vegetable grain bowl", 18, "Best when you have a protein, vegetable, and rice or another grain.", "Warm the grain, add cooked protein, then top with vegetables and sauce or dressing.", "protein:protein:PROTEIN", "vegetable:vegetable:VEGETABLE", "rice or grain:grain,rice,pasta,quinoa,tortilla:GRAIN", "sauce or dressing:sauce,dressing,condiment:SAUCE:optional"),
+        seedRecipe("Vegetable stir fry", 20, "Use vegetables with protein and a quick sauce.", "Cook vegetables in a pan, add protein if available, then finish with soy sauce, salsa, dressing, or another sauce.", "vegetables:vegetable:VEGETABLE", "protein:protein:PROTEIN:optional", "sauce:sauce,soy sauce,dressing,condiment:SAUCE:optional", "rice or noodles:rice,noodle,grain:GRAIN:optional"),
+        seedRecipe("Egg vegetable scramble", 10, "Use eggs, vegetables, and cheese for a quick breakfast or dinner.", "Whisk eggs, cook vegetables until tender, add eggs, then fold in cheese if available.", "eggs:egg:PROTEIN", "vegetables:vegetable:VEGETABLE", "cheese:cheese,dairy:DAIRY:optional"),
+        seedRecipe("Leftover wrap or quesadilla", 12, "Use leftover meat with tortillas and cheese.", "Fill a tortilla with leftovers, cheese, and vegetables. Toast until warm, then check before eating.", "leftover protein:leftover,protein,meat,chicken:LEFTOVER", "tortilla or wrap:tortilla,wrap:GRAIN", "cheese:cheese:DAIRY:optional", "vegetables:vegetable:VEGETABLE:optional"),
+        seedRecipe("Fruit yogurt smoothie or parfait", 5, "Use expiring fruit with yogurt or milk.", "Blend fruit with milk or yogurt, or layer fruit with yogurt and a crunchy topping.", "fruit:fruit:FRUIT", "yogurt or milk:yogurt,milk:DAIRY", "frozen fruit or ice:frozen,ice:FROZEN:optional", "granola or nuts:granola,nuts,snack:SNACK:optional"),
+        seedRecipe("Vegetable soup rescue", 30, "Use vegetables with broth, canned items, or pantry grains.", "Simmer vegetables with broth or water. Add canned beans, rice, pasta, or leftover protein if available.", "vegetables:vegetable:VEGETABLE", "broth or stock:broth,stock,sauce:SAUCE", "grain or canned beans:grain,rice,pasta,bean,canned:GRAIN:optional", "leftover protein:leftover,protein:LEFTOVER:optional"),
+        seedRecipe("Sandwich or melt", 10, "Use bread with cheese, protein, or vegetables.", "Layer bread with cheese and protein or vegetables. Toast as a melt or keep cold as a sandwich.", "bread:bread:GRAIN", "cheese:cheese:DAIRY", "protein:protein,meat,chicken,egg:PROTEIN:optional", "vegetables:vegetable:VEGETABLE:optional")
     )
 
     private fun seedRecipe(

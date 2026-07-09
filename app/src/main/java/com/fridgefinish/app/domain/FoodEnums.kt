@@ -34,3 +34,36 @@ enum class FreshnessStatus(val label: String) {
     EXPIRED("Past date"),
     FINISHED("Finished")
 }
+
+enum class FoodItemState(val label: String) {
+    FRESH("Fresh"),
+    USE_SOON("Use soon"),
+    EXPIRED("Expired"),
+    QUESTIONABLE("Questionable"),
+    SPOILED("Spoiled"),
+    FROZEN("Frozen")
+}
+
+enum class IngredientCategory(val label: String) {
+    PROTEIN("Protein"),
+    VEGETABLE("Vegetable"),
+    FRUIT("Fruit"),
+    GRAIN("Grain"),
+    DAIRY("Dairy"),
+    SAUCE("Sauce"),
+    CONDIMENT("Condiment"),
+    SPICE("Spice"),
+    SNACK("Snack"),
+    LEFTOVER("Leftover"),
+    FROZEN("Frozen"),
+    CANNED("Canned"),
+    BAKING("Baking"),
+    DRINK("Drink"),
+    OTHER("Other")
+}
+
+enum class FoodSafetyRiskLevel(val label: String) {
+    LOW("Low"),
+    MEDIUM("Medium"),
+    HIGH("High")
+}
