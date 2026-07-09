@@ -68,6 +68,23 @@ private fun String.normalizedFoodText(): String =
         .trim()
 
 private fun String.containsWholeFoodTerm(term: String): Boolean {
-    val pattern = Regex("(^|\\s)${Regex.escape(term)}(\\s|$)")
-    return pattern.containsMatchIn(this)
+    return foodTermVariants(term).any { variant ->
+        val pattern = Regex("(^|\\s)${Regex.escape(variant)}(\\s|$)")
+        pattern.containsMatchIn(this)
+    }
+}
+
+private fun foodTermVariants(term: String): Set<String> {
+    val clean = term.normalizedFoodText()
+    if (clean.isBlank()) return emptySet()
+
+    val variants = mutableSetOf(clean)
+    variants += when {
+        clean.endsWith("y") -> clean.dropLast(1) + "ies"
+        clean.endsWith("s") -> clean.dropLast(1)
+        else -> clean + "s"
+    }
+    if (clean.endsWith("es")) variants += clean.dropLast(2)
+    if (clean.endsWith("ies")) variants += clean.dropLast(3) + "y"
+    return variants
 }

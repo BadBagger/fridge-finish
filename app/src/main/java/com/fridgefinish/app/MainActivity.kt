@@ -128,6 +128,10 @@ import com.fridgefinish.app.domain.FreshnessStatus
 import com.fridgefinish.app.domain.DateTextParser
 import com.fridgefinish.app.domain.ReceiptImportCandidate
 import com.fridgefinish.app.domain.ReceiptTextParser
+import com.fridgefinish.app.domain.CookingTool
+import com.fridgefinish.app.domain.RecipeFilter
+import com.fridgefinish.app.domain.RecipeSuggestionEngine
+import com.fridgefinish.app.domain.RecipeSuggestionPreferences
 import com.fridgefinish.app.domain.cleanShoppingName
 import com.fridgefinish.app.domain.missingItemsNotAlreadyInShop
 import com.fridgefinish.app.domain.recipeIngredientMatchesFood
@@ -340,6 +344,11 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                     screen == Screen.RECIPES -> RecipeIdeasScreen(
                         uiState = uiState,
                         onOpenPlus = { screen = Screen.PLUS },
+                        onMarkIngredientsUsed = { idea ->
+                            uiState.activeFoods
+                                .filter { it.id in idea.usedFoodIds }
+                                .forEach { viewModel.markFinished(it, addToRestock = false) }
+                        },
                         onAddMissingToRestock = { idea ->
                             val mergeResult = missingItemsNotAlreadyInShop(
                                 missingItems = idea.missing,
@@ -843,8 +852,17 @@ private data class RecipeIdea(
     val servings: String,
     val portions: List<String>,
     val have: List<String>,
+    val expiringSoon: List<String>,
+    val optional: List<String>,
     val missing: List<String>,
     val urgentCount: Int,
+    val matchScore: Int,
+    val whySuggested: String,
+    val difficulty: String,
+    val filters: Set<RecipeFilter>,
+    val tools: Set<CookingTool>,
+    val safetyNote: String,
+    val usedFoodIds: List<Long>,
     val note: String,
     val steps: String
 )
@@ -853,6 +871,7 @@ private data class RecipeIdea(
 private fun RecipeIdeasScreen(
     uiState: FridgeFinishUiState,
     onOpenPlus: () -> Unit,
+    onMarkIngredientsUsed: (RecipeIdea) -> Unit,
     onAddMissingToRestock: (RecipeIdea) -> Unit
 ) {
     if (!uiState.subscription.isPlus) {
@@ -863,7 +882,16 @@ private fun RecipeIdeasScreen(
         )
         return
     }
-    val ideas = remember(uiState.activeFoods, uiState.recipes, uiState.recipeIngredients) { buildRecipeIdeas(uiState) }
+    var selectedFilters by remember { mutableStateOf(emptySet<RecipeFilter>()) }
+    var selectedTools by remember { mutableStateOf(emptySet<CookingTool>()) }
+    var maxMinutes by remember { mutableStateOf<Int?>(null) }
+    var hiddenTitles by remember { mutableStateOf(emptySet<String>()) }
+    var savedTitles by remember { mutableStateOf(emptySet<String>()) }
+    var recipeMessage by remember { mutableStateOf<String?>(null) }
+    val preferences = RecipeSuggestionPreferences(selectedFilters, maxMinutes, selectedTools)
+    val ideas = remember(uiState.activeFoods, uiState.recipes, uiState.recipeIngredients, selectedFilters, selectedTools, maxMinutes, hiddenTitles) {
+        buildRecipeIdeas(uiState, preferences).filterNot { it.title in hiddenTitles }
+    }
     val readyIdeas = ideas.filter { it.missing.isEmpty() }
     val almostIdeas = ideas.filter { it.missing.isNotEmpty() }
     var selectedRecipe by remember { mutableStateOf<RecipeIdea?>(null) }
@@ -877,7 +905,11 @@ private fun RecipeIdeasScreen(
             }
         )
     }
-    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(
+        Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(bottom = 96.dp)
+    ) {
         item {
             RecipeHeroCard(
                 ideas = ideas,
@@ -893,6 +925,35 @@ private fun RecipeIdeasScreen(
             }
         }
         item {
+            RecipePreferenceCard(
+                selectedFilters = selectedFilters,
+                onToggleFilter = { filter ->
+                    selectedFilters = if (filter in selectedFilters) selectedFilters - filter else selectedFilters + filter
+                },
+                maxMinutes = maxMinutes,
+                onMaxMinutesSelected = { maxMinutes = it },
+                selectedTools = selectedTools,
+                onToggleTool = { tool ->
+                    selectedTools = if (tool in selectedTools) selectedTools - tool else selectedTools + tool
+                },
+                onClear = {
+                    selectedFilters = emptySet()
+                    selectedTools = emptySet()
+                    maxMinutes = null
+                }
+            )
+        }
+        recipeMessage?.let { message ->
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                ) {
+                    Text(message, modifier = Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onSecondaryContainer)
+                }
+            }
+        }
+        item {
             MealPlanCard(
                 ideas = ideas,
                 onOpenRecipe = { selectedRecipe = it }
@@ -903,14 +964,114 @@ private fun RecipeIdeasScreen(
             if (readyIdeas.isEmpty()) EmptyRecipeCard("No ready recipes yet. Add a few staple items or scan food you already have.")
         }
         items(readyIdeas, key = { "ready-${it.title}" }) { idea ->
-            RecipeIdeaCard(idea, onAddMissingToRestock, onMoreInfo = { selectedRecipe = idea })
+            RecipeIdeaCard(
+                idea = idea,
+                isSaved = idea.title in savedTitles,
+                onCookThis = {
+                    selectedRecipe = idea
+                    recipeMessage = "Opened ${idea.title}. Review dates before cooking."
+                },
+                onSaveRecipe = {
+                    savedTitles = savedTitles + idea.title
+                    recipeMessage = "Saved ${idea.title} for later."
+                },
+                onHide = {
+                    hiddenTitles = hiddenTitles + idea.title
+                    recipeMessage = "Hid ${idea.title}."
+                },
+                onMarkIngredientsUsed = {
+                    onMarkIngredientsUsed(idea)
+                    recipeMessage = "Marked matched ingredients used."
+                },
+                onAddMissingToRestock = onAddMissingToRestock,
+                onMoreInfo = { selectedRecipe = idea }
+            )
         }
         item {
             SectionHeader("Almost there", almostIdeas.size)
             if (almostIdeas.isEmpty()) EmptyRecipeCard("No almost-ready ideas right now.")
         }
         items(almostIdeas, key = { "almost-${it.title}" }) { idea ->
-            RecipeIdeaCard(idea, onAddMissingToRestock, onMoreInfo = { selectedRecipe = idea })
+            RecipeIdeaCard(
+                idea = idea,
+                isSaved = idea.title in savedTitles,
+                onCookThis = {
+                    selectedRecipe = idea
+                    recipeMessage = "Opened ${idea.title}. Add missing items first if needed."
+                },
+                onSaveRecipe = {
+                    savedTitles = savedTitles + idea.title
+                    recipeMessage = "Saved ${idea.title} for later."
+                },
+                onHide = {
+                    hiddenTitles = hiddenTitles + idea.title
+                    recipeMessage = "Hid ${idea.title}."
+                },
+                onMarkIngredientsUsed = {
+                    onMarkIngredientsUsed(idea)
+                    recipeMessage = "Marked matched ingredients used."
+                },
+                onAddMissingToRestock = onAddMissingToRestock,
+                onMoreInfo = { selectedRecipe = idea }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RecipePreferenceCard(
+    selectedFilters: Set<RecipeFilter>,
+    onToggleFilter: (RecipeFilter) -> Unit,
+    maxMinutes: Int?,
+    onMaxMinutesSelected: (Int?) -> Unit,
+    selectedTools: Set<CookingTool>,
+    onToggleTool: (CookingTool) -> Unit,
+    onClear: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Recipe controls", style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = onClear) { Text("Clear") }
+            }
+            Text("Meal type", style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                RecipeFilter.entries.forEach { filter ->
+                    FilterChip(
+                        selected = filter in selectedFilters,
+                        onClick = { onToggleFilter(filter) },
+                        label = { Text(filter.label) }
+                    )
+                }
+            }
+            Text("Available time", style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(null to "Any", 5 to "5 min", 15 to "15 min", 30 to "30 min", 60 to "1 hour").forEach { (minutes, label) ->
+                    FilterChip(
+                        selected = maxMinutes == minutes,
+                        onClick = { onMaxMinutesSelected(minutes) },
+                        label = { Text(label) }
+                    )
+                }
+            }
+            Text("Cooking tools", style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                CookingTool.entries.forEach { tool ->
+                    FilterChip(
+                        selected = tool in selectedTools,
+                        onClick = { onToggleTool(tool) },
+                        label = { Text(tool.label) }
+                    )
+                }
+            }
         }
     }
 }
@@ -956,7 +1117,8 @@ private fun RecipeHeroCard(
                     Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.weight(1f)) {
                             Text(best.title, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Text(if (best.missing.isEmpty()) "You can make this with what you have." else "You only need ${best.missing.size} more item${if (best.missing.size == 1) "" else "s"}.")
+                            Text("${best.matchScore}% match - ${best.minutes} min - ${best.difficulty}")
+                            Text(best.whySuggested, style = MaterialTheme.typography.bodySmall)
                         }
                         TextButton(onClick = { onOpenRecipe(best) }) {
                             Text("View")
@@ -1041,6 +1203,11 @@ private fun MealPlanCard(ideas: List<RecipeIdea>, onOpenRecipe: (RecipeIdea) -> 
 @Composable
 private fun RecipeIdeaCard(
     idea: RecipeIdea,
+    isSaved: Boolean,
+    onCookThis: () -> Unit,
+    onSaveRecipe: () -> Unit,
+    onHide: () -> Unit,
+    onMarkIngredientsUsed: () -> Unit,
     onAddMissingToRestock: (RecipeIdea) -> Unit,
     onMoreInfo: () -> Unit
 ) {
@@ -1052,24 +1219,41 @@ private fun RecipeIdeaCard(
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Timer, contentDescription = null, modifier = Modifier.size(16.dp))
                         Text("${idea.minutes} min")
-                        Text(idea.servings)
-                        Text(if (idea.missing.isEmpty()) "Ready now" else "Almost there", color = MaterialTheme.colorScheme.primary)
+                        Text(idea.difficulty)
+                        Text("${idea.matchScore}% match", color = MaterialTheme.colorScheme.primary)
                     }
                 }
                 if (idea.urgentCount > 0) {
                     AssistChip(onClick = {}, label = { Text("Uses eat soon") })
                 }
             }
-            Text(idea.note, style = MaterialTheme.typography.bodyMedium)
-            Text(idea.steps, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("You have", style = MaterialTheme.typography.labelLarge)
+            Text(idea.whySuggested, style = MaterialTheme.typography.bodyMedium)
+            Text("${idea.servings}. ${idea.note}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            RecipeTagRow(idea)
+            if (idea.expiringSoon.isNotEmpty()) {
+                Text("Use soon", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    idea.expiringSoon.forEach {
+                        AssistChip(onClick = {}, label = { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) })
+                    }
+                }
+            }
+            Text("Ingredients used", style = MaterialTheme.typography.labelLarge)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                idea.have.take(4).forEach {
+                idea.have.take(6).forEach {
                     AssistChip(onClick = {}, label = { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) })
                 }
             }
+            if (idea.optional.isNotEmpty()) {
+                Text("Optional ingredients you have", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    idea.optional.take(4).forEach {
+                        AssistChip(onClick = {}, label = { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) })
+                    }
+                }
+            }
             if (idea.missing.isNotEmpty()) {
-                Text("Add to make it", style = MaterialTheme.typography.labelLarge)
+                Text("Missing ingredients", style = MaterialTheme.typography.labelLarge)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     idea.missing.forEach {
                         AssistChip(onClick = {}, label = { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) })
@@ -1080,10 +1264,31 @@ private fun RecipeIdeaCard(
                     Text("Add missing to Shop")
                 }
             }
-            OutlinedButton(onClick = onMoreInfo, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(18.dp))
-                Text("More info")
+            Text(idea.safetyNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onCookThis) { Text("Cook this") }
+                OutlinedButton(onClick = onSaveRecipe, enabled = !isSaved) { Text(if (isSaved) "Saved" else "Save recipe") }
+                OutlinedButton(onClick = onHide) { Text("Hide") }
+                OutlinedButton(onClick = onMarkIngredientsUsed, enabled = idea.usedFoodIds.isNotEmpty()) { Text("Mark used") }
+                TextButton(onClick = onMoreInfo) {
+                    Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("More info")
+                }
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RecipeTagRow(idea: RecipeIdea) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        AssistChip(onClick = {}, label = { Text(idea.servings) })
+        idea.filters.take(3).forEach { filter ->
+            AssistChip(onClick = {}, label = { Text(filter.label) })
+        }
+        idea.tools.take(2).forEach { tool ->
+            AssistChip(onClick = {}, label = { Text(tool.label) })
         }
     }
 }
@@ -1113,16 +1318,33 @@ private fun RecipeInfoDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("${idea.minutes} minutes - ${idea.servings}")
+                Text("${idea.matchScore}% match - ${idea.minutes} minutes - ${idea.difficulty} - ${idea.servings}")
+                Text(idea.whySuggested)
                 Text(idea.note)
+                Text("Tools", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    idea.tools.forEach { AssistChip(onClick = {}, label = { Text(it.label) }) }
+                }
                 Text("Portions", style = MaterialTheme.typography.labelLarge)
                 idea.portions.forEach { portion ->
                     Text(portion)
                 }
                 Text("For a family: double the portions for 4+ servings, or add a simple side if you are short on one ingredient.", style = MaterialTheme.typography.bodySmall)
-                Text("Use first", style = MaterialTheme.typography.labelLarge)
+                if (idea.expiringSoon.isNotEmpty()) {
+                    Text("Use first", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        idea.expiringSoon.forEach { AssistChip(onClick = {}, label = { Text(it) }) }
+                    }
+                }
+                Text("Owned ingredients", style = MaterialTheme.typography.labelLarge)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     idea.have.take(6).forEach { AssistChip(onClick = {}, label = { Text(it) }) }
+                }
+                if (idea.optional.isNotEmpty()) {
+                    Text("Optional ingredients you have", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        idea.optional.forEach { AssistChip(onClick = {}, label = { Text(it) }) }
+                    }
                 }
                 if (idea.missing.isNotEmpty()) {
                     Text("Need to buy", style = MaterialTheme.typography.labelLarge)
@@ -1134,43 +1356,44 @@ private fun RecipeInfoDialog(
                 idea.detailSteps().forEachIndexed { index, step ->
                     Text("${index + 1}. $step")
                 }
-                Text("Dates are reminders, not safety guarantees. Check before eating.", style = MaterialTheme.typography.bodySmall)
+                Text(idea.safetyNote, style = MaterialTheme.typography.bodySmall)
             }
         }
     )
 }
 
-private fun buildRecipeIdeas(uiState: FridgeFinishUiState): List<RecipeIdea> {
-    val foods = uiState.activeFoods
-    val ingredientsByRecipe = uiState.recipeIngredients.groupBy { it.recipeId }
-
-    return uiState.recipes.mapNotNull { recipe ->
-        val ingredients = ingredientsByRecipe[recipe.id].orEmpty()
-        val matchedFoods = ingredients.mapNotNull { ingredient -> foods.firstOrNull { food -> ingredient.matches(food) } }
-        val haveItems = matchedFoods.map { it.name.ifBlank { it.category.label }.cleanShoppingName() }
-        val missing = ingredients
-            .filter { ingredient -> foods.none { food -> ingredient.matches(food) } && ingredient.required }
-            .map { it.shoppingLabel() }
-            .distinct()
-        if (haveItems.isEmpty() || missing.size > 2) return@mapNotNull null
-        val urgent = matchedFoods.count { food -> uiState.statusOf(food) in listOf(FreshnessStatus.EXPIRES_TODAY, FreshnessStatus.EAT_SOON, FreshnessStatus.EXPIRED) }
+private fun buildRecipeIdeas(
+    uiState: FridgeFinishUiState,
+    preferences: RecipeSuggestionPreferences = RecipeSuggestionPreferences()
+): List<RecipeIdea> =
+    RecipeSuggestionEngine.buildSuggestions(
+        foods = uiState.activeFoods,
+        recipes = uiState.recipes,
+        ingredients = uiState.recipeIngredients,
+        preferences = preferences
+    ).map { suggestion ->
+        val recipe = suggestion.recipe
         RecipeIdea(
-            recipe.title,
-            recipe.minutes,
-            recipe.estimatedServings(),
-            recipe.portionGuidance(),
-            haveItems.distinct(),
-            missing,
-            urgent,
-            recipe.description,
-            recipe.steps
+            title = recipe.title,
+            minutes = recipe.minutes,
+            servings = recipe.estimatedServings(),
+            portions = recipe.portionGuidance(),
+            have = suggestion.requiredMatchedFoods.map { it.name.ifBlank { it.category.label }.cleanShoppingName() }.distinct(),
+            expiringSoon = suggestion.expiringSoonFoods.map { it.name.cleanShoppingName() }.distinct(),
+            optional = suggestion.optionalMatchedFoods.map { it.name.cleanShoppingName() }.distinct(),
+            missing = suggestion.missingRequired.map { it.shoppingLabel() }.distinct(),
+            urgentCount = suggestion.expiringSoonFoods.size,
+            matchScore = suggestion.matchScore,
+            whySuggested = suggestion.whySuggested,
+            difficulty = suggestion.difficulty,
+            filters = suggestion.filters,
+            tools = suggestion.tools,
+            safetyNote = suggestion.safetyNote,
+            usedFoodIds = suggestion.usedFoods.map { it.id },
+            note = recipe.description,
+            steps = recipe.steps
         )
-    }.sortedWith(
-        compareBy<RecipeIdea> { it.missing.size }
-            .thenByDescending { it.urgentCount }
-            .thenBy { it.minutes }
-    )
-}
+    }
 
 private fun RecipeEntity.estimatedServings(): String {
     val text = title.lowercase()

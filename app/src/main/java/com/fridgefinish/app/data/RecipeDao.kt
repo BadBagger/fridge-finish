@@ -22,6 +22,9 @@ interface RecipeDao {
     @Query("SELECT COUNT(*) FROM recipes")
     suspend fun countRecipes(): Int
 
+    @Query("SELECT title FROM recipes")
+    suspend fun recipeTitles(): List<String>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRecipe(recipe: RecipeEntity): Long
 

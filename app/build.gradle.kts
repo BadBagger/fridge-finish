@@ -13,8 +13,8 @@ android {
         applicationId = "com.fridgefinish.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 25
-        versionName = "1.24-launcher-icon-refresh"
+        versionCode = 26
+        versionName = "1.25-smart-recipes"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
