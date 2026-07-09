@@ -84,8 +84,10 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -93,7 +95,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -102,6 +103,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -110,7 +112,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.input.KeyboardType
@@ -156,6 +157,14 @@ import com.fridgefinish.app.subscription.FridgeFinishFeatureGate
 import com.fridgefinish.app.subscription.FridgeFinishPlans
 import com.fridgefinish.app.subscription.FridgeFinishSubscriptionState
 import com.fridgefinish.app.subscription.PlusFeature
+import com.fridgefinish.app.theme.AppearanceMode
+import com.fridgefinish.app.theme.AppThemeStyle
+import com.fridgefinish.app.theme.FridgeFinishColors
+import com.fridgefinish.app.theme.FridgeFinishTheme
+import com.fridgefinish.app.theme.ThemePreferences
+import com.fridgefinish.app.theme.appThemeStyles
+import com.fridgefinish.app.theme.previewColorScheme
+import com.fridgefinish.app.theme.previewSemanticColors
 import com.fridgefinish.app.ui.BarcodeLookupState
 import com.fridgefinish.app.ui.BarcodeScannerScreen
 import com.fridgefinish.app.ui.FridgeFinishUiState
@@ -165,6 +174,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -207,14 +217,20 @@ private val storageScreens = listOf(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val uiState by viewModel.uiState.collectAsState()
     val barcodeLookup by viewModel.barcodeLookup.collectAsState()
+    val selectedThemeStyle by ThemePreferences.selectedThemeStyle(context).collectAsState(AppThemeStyle.OriginalFresh)
+    val selectedAppearanceMode by ThemePreferences.selectedAppearanceMode(context).collectAsState(AppearanceMode.FollowSystem)
+    var previewThemeStyle by rememberSaveable { mutableStateOf<AppThemeStyle?>(null) }
     var screen by rememberSaveable { mutableStateOf(Screen.TODAY) }
     var editingFood by remember { mutableStateOf<FoodItemEntity?>(null) }
     var addingFood by remember { mutableStateOf<FoodItemEntity?>(null) }
     var useItFirstFood by remember { mutableStateOf<FoodItemEntity?>(null) }
     var upgradePrompt by remember { mutableStateOf<FeatureGateResult.UpgradeRequired?>(null) }
     var shopMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    val activeThemeStyle = previewThemeStyle ?: selectedThemeStyle
 
     fun showGate(result: FeatureGateResult): Boolean {
         return when (result) {
@@ -232,7 +248,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
         }
     }
 
-    FridgeFinishTheme {
+    FridgeFinishTheme(style = activeThemeStyle, appearanceMode = selectedAppearanceMode) {
         upgradePrompt?.let { prompt ->
             UpgradePromptDialog(
                 prompt = prompt,
@@ -275,11 +291,18 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
             },
             bottomBar = {
                 if (editingFood == null && addingFood == null && useItFirstFood == null) {
-                    NavigationBar {
+                    NavigationBar(containerColor = FridgeFinishColors.current.bottomNavContainer) {
                         listOf(Screen.TODAY, Screen.FRIDGE, Screen.RECIPES, Screen.RESTOCK, Screen.SETTINGS).forEach { item ->
                             NavigationBarItem(
                                 selected = screen == item || (item == Screen.FRIDGE && screen in storageScreens),
                                 onClick = { screen = item },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = FridgeFinishColors.current.onBottomNavSelected,
+                                    selectedTextColor = FridgeFinishColors.current.onBottomNavSelected,
+                                    indicatorColor = FridgeFinishColors.current.bottomNavSelected,
+                                    unselectedIconColor = FridgeFinishColors.current.bottomNavUnselected,
+                                    unselectedTextColor = FridgeFinishColors.current.bottomNavUnselected
+                                ),
                                 icon = {
                         Icon(
                             when (item) {
@@ -466,6 +489,18 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                         recipeFeedback = uiState.recipeFeedback,
                         hiddenRecipeTitles = uiState.hiddenRecipeTitles,
                         dislikedIngredients = uiState.dislikedIngredients,
+                        selectedThemeStyle = selectedThemeStyle,
+                        previewThemeStyle = previewThemeStyle,
+                        selectedAppearanceMode = selectedAppearanceMode,
+                        onApplyThemeStyle = { style ->
+                            previewThemeStyle = null
+                            coroutineScope.launch { ThemePreferences.setThemeStyle(context, style) }
+                        },
+                        onPreviewThemeStyle = { style -> previewThemeStyle = style },
+                        onClearThemePreview = { previewThemeStyle = null },
+                        onAppearanceModeSelected = { mode ->
+                            coroutineScope.launch { ThemePreferences.setAppearanceMode(context, mode) }
+                        },
                         onOpenPlus = { screen = Screen.PLUS },
                         onRestorePurchases = viewModel::restorePlusPurchases,
                         onAddSamples = viewModel::addSampleData,
@@ -773,16 +808,11 @@ private fun EmptySectionCard(title: String) {
 
 @Composable
 private fun CountCard(label: String, count: Int, status: FreshnessStatus, modifier: Modifier = Modifier) {
-    val countColor = when (status) {
-        FreshnessStatus.EXPIRED -> MaterialTheme.colorScheme.error
-        FreshnessStatus.EXPIRES_TODAY -> MaterialTheme.colorScheme.secondary
-        FreshnessStatus.EAT_SOON -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.onSurface
-    }
-    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+    val countColor = statusContentColor(status)
+    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = statusContainerColor(status))) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(count.toString(), style = MaterialTheme.typography.headlineMedium, color = countColor)
-            Text(label, style = MaterialTheme.typography.labelMedium)
+            Text(label, style = MaterialTheme.typography.labelMedium, color = countColor)
         }
     }
 }
@@ -1831,13 +1861,13 @@ private fun RecipeIdeaCard(
                 }
                 Surface(
                     shape = RoundedCornerShape(16.dp),
-                    color = if (idea.matchScore >= 80) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                    color = if (idea.matchScore >= 80) FridgeFinishColors.current.success else FridgeFinishColors.current.chip
                 ) {
                     Text(
                         "${idea.matchScore}%",
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                         style = MaterialTheme.typography.labelLarge,
-                        color = if (idea.matchScore >= 80) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (idea.matchScore >= 80) FridgeFinishColors.current.onSuccess else FridgeFinishColors.current.onChip
                     )
                 }
             }
@@ -2581,14 +2611,32 @@ private fun String.hasAny(vararg terms: String): Boolean =
 
 @Composable
 private fun StatusChip(status: FreshnessStatus) {
-    val color = when (status) {
-        FreshnessStatus.EXPIRED -> MaterialTheme.colorScheme.errorContainer
-        FreshnessStatus.EXPIRES_TODAY -> MaterialTheme.colorScheme.secondaryContainer
-        FreshnessStatus.EAT_SOON -> MaterialTheme.colorScheme.primaryContainer
-        FreshnessStatus.FRESH -> MaterialTheme.colorScheme.surfaceVariant
-        FreshnessStatus.FINISHED -> MaterialTheme.colorScheme.tertiaryContainer
-    }
-    AssistChip(onClick = {}, label = { Text(status.label) }, colors = androidx.compose.material3.AssistChipDefaults.assistChipColors(containerColor = color))
+    AssistChip(
+        onClick = {},
+        label = { Text(status.label) },
+        colors = androidx.compose.material3.AssistChipDefaults.assistChipColors(
+            containerColor = statusContainerColor(status),
+            labelColor = statusContentColor(status)
+        )
+    )
+}
+
+@Composable
+private fun statusContainerColor(status: FreshnessStatus) = when (status) {
+    FreshnessStatus.EXPIRED -> FridgeFinishColors.current.expired
+    FreshnessStatus.EXPIRES_TODAY -> FridgeFinishColors.current.expiring
+    FreshnessStatus.EAT_SOON -> FridgeFinishColors.current.useSoon
+    FreshnessStatus.FRESH -> FridgeFinishColors.current.fresh
+    FreshnessStatus.FINISHED -> FridgeFinishColors.current.success
+}
+
+@Composable
+private fun statusContentColor(status: FreshnessStatus) = when (status) {
+    FreshnessStatus.EXPIRED -> FridgeFinishColors.current.onExpired
+    FreshnessStatus.EXPIRES_TODAY -> FridgeFinishColors.current.onExpiring
+    FreshnessStatus.EAT_SOON -> FridgeFinishColors.current.onUseSoon
+    FreshnessStatus.FRESH -> FridgeFinishColors.current.onFresh
+    FreshnessStatus.FINISHED -> FridgeFinishColors.current.onSuccess
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -3055,6 +3103,13 @@ private fun SettingsScreen(
     recipeFeedback: List<RecipeFeedbackEntity>,
     hiddenRecipeTitles: List<String>,
     dislikedIngredients: List<String>,
+    selectedThemeStyle: AppThemeStyle,
+    previewThemeStyle: AppThemeStyle?,
+    selectedAppearanceMode: AppearanceMode,
+    onApplyThemeStyle: (AppThemeStyle) -> Unit,
+    onPreviewThemeStyle: (AppThemeStyle) -> Unit,
+    onClearThemePreview: () -> Unit,
+    onAppearanceModeSelected: (AppearanceMode) -> Unit,
     onOpenPlus: () -> Unit,
     onRestorePurchases: () -> Unit,
     onAddSamples: () -> Unit,
@@ -3075,6 +3130,19 @@ private fun SettingsScreen(
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item {
             SettingsHeroCard(subscriptionState)
+        }
+        item {
+            AppearanceSettingsCard(
+                subscriptionState = subscriptionState,
+                selectedThemeStyle = selectedThemeStyle,
+                previewThemeStyle = previewThemeStyle,
+                selectedAppearanceMode = selectedAppearanceMode,
+                onApplyThemeStyle = onApplyThemeStyle,
+                onPreviewThemeStyle = onPreviewThemeStyle,
+                onClearThemePreview = onClearThemePreview,
+                onAppearanceModeSelected = onAppearanceModeSelected,
+                onOpenPlus = onOpenPlus
+            )
         }
         item {
             SettingsCard("Plan") {
@@ -3181,6 +3249,252 @@ private fun SettingsScreen(
             SettingsCard("Food date note") {
                 Text("Fridge Finish helps you organize food dates and reminders. It does not determine whether food is safe to eat.")
                 Text("Use your judgment and check before eating, especially when something is past date.")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun AppearanceSettingsCard(
+    subscriptionState: FridgeFinishSubscriptionState,
+    selectedThemeStyle: AppThemeStyle,
+    previewThemeStyle: AppThemeStyle?,
+    selectedAppearanceMode: AppearanceMode,
+    onApplyThemeStyle: (AppThemeStyle) -> Unit,
+    onPreviewThemeStyle: (AppThemeStyle) -> Unit,
+    onClearThemePreview: () -> Unit,
+    onAppearanceModeSelected: (AppearanceMode) -> Unit,
+    onOpenPlus: () -> Unit
+) {
+    var lockedThemePrompt by remember { mutableStateOf<AppThemeStyle?>(null) }
+
+    lockedThemePrompt?.let { style ->
+        ModalBottomSheet(onDismissRequest = { lockedThemePrompt = null }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("Unlock Style Packs", style = MaterialTheme.typography.headlineSmall)
+                Text("Premium unlocks extra Fridge Finish themes, advanced recipe tools, smarter waste-saving features, and personalization.")
+                Button(
+                    onClick = {
+                        onPreviewThemeStyle(style)
+                        lockedThemePrompt = null
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Preview theme")
+                }
+                OutlinedButton(
+                    onClick = {
+                        lockedThemePrompt = null
+                        onOpenPlus()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Unlock Premium")
+                }
+                TextButton(
+                    onClick = { lockedThemePrompt = null },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Not now")
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+        }
+    }
+
+    SettingsCard("Appearance") {
+        Text("Original Fresh stays the free default. Premium style packs are optional.")
+        if (previewThemeStyle != null) {
+            Card(colors = CardDefaults.cardColors(containerColor = FridgeFinishColors.current.warning)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Previewing ${previewThemeStyle.displayName}", color = FridgeFinishColors.current.onWarning, style = MaterialTheme.typography.titleSmall)
+                        Text("Apply requires Premium.", color = FridgeFinishColors.current.onWarning, style = MaterialTheme.typography.bodySmall)
+                    }
+                    TextButton(onClick = onClearThemePreview) { Text("Stop") }
+                }
+            }
+        }
+        Text("Mode", style = MaterialTheme.typography.labelLarge)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AppearanceMode.entries.forEach { mode ->
+                FilterChip(
+                    selected = selectedAppearanceMode == mode,
+                    onClick = { onAppearanceModeSelected(mode) },
+                    label = { Text(mode.displayName) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = FridgeFinishColors.current.selectedChip,
+                        selectedLabelColor = FridgeFinishColors.current.onSelectedChip
+                    )
+                )
+            }
+        }
+        Text("Theme style", style = MaterialTheme.typography.labelLarge)
+        appThemeStyles().forEach { style ->
+            val locked = style.isPremium && !subscriptionState.isPlus
+            val selected = selectedThemeStyle == style
+            val previewing = previewThemeStyle == style
+            ThemeStylePreviewCard(
+                style = style,
+                appearanceMode = selectedAppearanceMode,
+                selected = selected,
+                previewing = previewing,
+                locked = locked,
+                onClick = {
+                    when {
+                        locked -> lockedThemePrompt = style
+                        else -> onApplyThemeStyle(style)
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThemeStylePreviewCard(
+    style: AppThemeStyle,
+    appearanceMode: AppearanceMode,
+    selected: Boolean,
+    previewing: Boolean,
+    locked: Boolean,
+    onClick: () -> Unit
+) {
+    val scheme = previewColorScheme(style, appearanceMode)
+    val semantic = previewSemanticColors(style, appearanceMode)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = scheme.surface),
+        border = androidx.compose.foundation.BorderStroke(
+            width = if (selected || previewing) 2.dp else 1.dp,
+            color = if (selected || previewing) scheme.primary else scheme.outline
+        )
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(style.displayName, style = MaterialTheme.typography.titleMedium, color = scheme.onSurface)
+                    Text(
+                        when {
+                            selected -> "Applied"
+                            previewing -> "Previewing"
+                            locked -> "Premium style pack"
+                            else -> "Free default"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (locked) Icon(Icons.Default.Lock, contentDescription = null, tint = scheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                    Box(Modifier.size(18.dp).clip(RoundedCornerShape(6.dp)).background(scheme.primary))
+                    Box(Modifier.size(18.dp).clip(RoundedCornerShape(6.dp)).background(scheme.tertiary))
+                    Box(Modifier.size(18.dp).clip(RoundedCornerShape(6.dp)).background(semantic.expiring))
+                }
+            }
+            MiniThemePreview(scheme = scheme, semantic = semantic)
+        }
+    }
+}
+
+@Composable
+private fun MiniThemePreview(
+    scheme: androidx.compose.material3.ColorScheme,
+    semantic: com.fridgefinish.app.theme.FridgeFinishSemanticColors
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(scheme.background)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(semantic.card)
+                .padding(8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Lettuce", style = MaterialTheme.typography.titleSmall, color = scheme.onSurface)
+                Text("Fridge - Produce", style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+            }
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(semantic.useSoon)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text("Eat soon", style = MaterialTheme.typography.labelSmall, color = semantic.onUseSoon)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(semantic.recipe)
+                    .padding(8.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Recipe idea", style = MaterialTheme.typography.labelMedium, color = semantic.onRecipe)
+                    Text("Salad wrap", style = MaterialTheme.typography.bodySmall, color = semantic.onRecipe)
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(semantic.primaryButton)
+                    .padding(8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Add food", style = MaterialTheme.typography.labelMedium, color = semantic.onPrimaryButton)
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(semantic.bottomNavContainer)
+                .padding(6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            listOf("Today", "Storage", "Recipes").forEachIndexed { index, label ->
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (index == 0) semantic.bottomNavSelected else semantic.bottomNavContainer)
+                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                ) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (index == 0) semantic.onBottomNavSelected else semantic.bottomNavUnselected
+                    )
+                }
             }
         }
     }
@@ -4091,35 +4405,4 @@ private fun enhanceForDotMatrixText(source: Bitmap): Bitmap {
     val paint = Paint().apply { colorFilter = ColorMatrixColorFilter(matrix) }
     Canvas(output).drawBitmap(source, 0f, 0f, paint)
     return output
-}
-
-@Composable
-private fun FridgeFinishTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = lightColorScheme(
-            primary = Color(0xFF149A66),
-            onPrimary = Color.White,
-            primaryContainer = Color(0xFFDDF8EA),
-            onPrimaryContainer = Color(0xFF083D2A),
-            secondary = Color(0xFF6FBF45),
-            onSecondary = Color.White,
-            secondaryContainer = Color(0xFFE8F7D8),
-            onSecondaryContainer = Color(0xFF21390B),
-            tertiary = Color(0xFF4A8F78),
-            onTertiary = Color.White,
-            tertiaryContainer = Color(0xFFD9F1E8),
-            onTertiaryContainer = Color(0xFF0A3528),
-            background = Color(0xFFFCFFFD),
-            onBackground = Color(0xFF17211C),
-            surface = Color(0xFFFFFFFF),
-            onSurface = Color(0xFF17211C),
-            surfaceVariant = Color(0xFFF0F7F2),
-            onSurfaceVariant = Color(0xFF4D5B53),
-            error = Color(0xFFB3261E),
-            onError = Color.White,
-            errorContainer = Color(0xFFFFE1DD),
-            onErrorContainer = Color(0xFF410E0B)
-        ),
-        content = content
-    )
 }

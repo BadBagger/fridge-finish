@@ -13,8 +13,8 @@ android {
         applicationId = "com.fridgefinish.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 27
-        versionName = "1.26-recipe-generator-rescue"
+        versionCode = 28
+        versionName = "1.27-style-packs"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -64,6 +64,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
 
     implementation("androidx.camera:camera-camera2:1.4.1")
