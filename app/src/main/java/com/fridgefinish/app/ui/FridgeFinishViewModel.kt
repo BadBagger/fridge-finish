@@ -19,6 +19,7 @@ import com.fridgefinish.app.domain.FreshnessCalculator
 import com.fridgefinish.app.domain.FreshnessStatus
 import com.fridgefinish.app.subscription.BillingGateway
 import com.fridgefinish.app.subscription.BillingResult
+import com.fridgefinish.app.subscription.BetaEntitlementPreferences
 import com.fridgefinish.app.subscription.FridgeFinishSubscriptionState
 import com.fridgefinish.app.subscription.PlaceholderBillingGateway
 import com.fridgefinish.app.subscription.toUserMessage
@@ -89,7 +90,13 @@ class FridgeFinishViewModel(application: Application) : AndroidViewModel(applica
         combine(repository.recipes, repository.recipeIngredients, repository.recipeFeedback) { recipes, ingredients, feedback ->
             Triple(recipes, ingredients, feedback)
         },
-        combine(billingGateway.subscriptionTier, billingMessage) { tier, message -> tier to message }
+        combine(
+            billingGateway.subscriptionTier,
+            billingMessage,
+            BetaEntitlementPreferences.enabled(application)
+        ) { tier, message, betaTesterAccess ->
+            Triple(tier, message, betaTesterAccess)
+        }
     ) { foodData, recipeData, billingData ->
         val activeItemCount = foodData.first.count { !it.isFinished }
         FridgeFinishUiState(
@@ -102,7 +109,8 @@ class FridgeFinishViewModel(application: Application) : AndroidViewModel(applica
                 tier = billingData.first,
                 activeItemCount = activeItemCount,
                 billingMessage = billingData.second,
-                hasAdminAccess = hasAdminAccess
+                hasAdminAccess = hasAdminAccess,
+                hasBetaTesterAccess = billingData.third
             )
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FridgeFinishUiState())
@@ -173,6 +181,13 @@ class FridgeFinishViewModel(application: Application) : AndroidViewModel(applica
     fun restorePlusPurchases() {
         viewModelScope.launch {
             billingMessage.value = billingGateway.restorePurchases().toUserMessage()
+        }
+    }
+
+    fun activateBetaPremium() {
+        viewModelScope.launch {
+            BetaEntitlementPreferences.setEnabled(getApplication(), true)
+            billingMessage.value = "Beta Premium is unlocked on this device for testing."
         }
     }
 

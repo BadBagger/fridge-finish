@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".debug.MarketingDemoReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.fridgefinish.app.DEBUG_MARKETING_DEMO" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

@@ -22,6 +22,17 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -58,6 +69,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Kitchen
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
@@ -70,6 +82,7 @@ import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -91,6 +104,9 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -108,6 +124,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -152,6 +169,7 @@ import com.fridgefinish.app.domain.missingItemsNotAlreadyInShop
 import com.fridgefinish.app.domain.recipeIngredientMatchesFood
 import com.fridgefinish.app.domain.isAgedLeftover
 import com.fridgefinish.app.domain.isHighRiskFood
+import com.fridgefinish.app.motion.FridgeFinishMotion
 import com.fridgefinish.app.subscription.FeatureGateResult
 import com.fridgefinish.app.subscription.FridgeFinishFeatureGate
 import com.fridgefinish.app.subscription.FridgeFinishPlans
@@ -214,7 +232,7 @@ private val storageScreens = listOf(
     Screen.OTHER
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
     val context = LocalContext.current
@@ -230,6 +248,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
     var useItFirstFood by remember { mutableStateOf<FoodItemEntity?>(null) }
     var upgradePrompt by remember { mutableStateOf<FeatureGateResult.UpgradeRequired?>(null) }
     var shopMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
     val activeThemeStyle = previewThemeStyle ?: selectedThemeStyle
 
     fun showGate(result: FeatureGateResult): Boolean {
@@ -248,6 +267,35 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
         }
     }
 
+    fun finishFoodWithUndo(item: FoodItemEntity, addToRestock: Boolean = true) {
+        viewModel.markFinished(item, addToRestock = addToRestock)
+        coroutineScope.launch {
+            val result = snackbarHostState.showSnackbar(
+                message = "${item.name.ifBlank { "Food item" }.cleanShoppingName()} marked finished",
+                actionLabel = "Undo",
+                withDismissAction = true
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                viewModel.saveFood(item.copy(isFinished = false, finishedDate = null))
+            }
+        }
+    }
+
+    fun showSavedMessage(name: String) {
+        coroutineScope.launch {
+            snackbarHostState.showSnackbar(
+                message = "${name.ifBlank { "Food item" }.cleanShoppingName()} saved",
+                withDismissAction = true
+            )
+        }
+    }
+
+    val motionTarget = when {
+        editingFood != null || addingFood != null -> 100
+        useItFirstFood != null -> 90
+        else -> screen.ordinal
+    }
+
     FridgeFinishTheme(style = activeThemeStyle, appearanceMode = selectedAppearanceMode) {
         upgradePrompt?.let { prompt ->
             UpgradePromptDialog(
@@ -260,6 +308,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
             )
         }
         Scaffold(
+            snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 TopAppBar(
                     title = {
@@ -329,8 +378,14 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                     .padding(padding),
                 color = MaterialTheme.colorScheme.background
             ) {
-                when {
-                    useItFirstFood != null -> UseItFirstScreen(
+                AnimatedContent(
+                    targetState = motionTarget,
+                    transitionSpec = { FridgeFinishMotion.screenTransform(targetState >= initialState) },
+                    label = "screen-transition"
+                ) { animatedTarget ->
+                    androidx.compose.runtime.key(animatedTarget) {
+                    when {
+                        useItFirstFood != null -> UseItFirstScreen(
                         item = useItFirstFood!!,
                         uiState = uiState,
                         onBack = { useItFirstFood = null },
@@ -378,8 +433,8 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                             useItFirstFood = null
                             screen = Screen.RESTOCK
                         }
-                    )
-                    editingFood != null || addingFood != null -> FoodEditorScreen(
+                        )
+                        editingFood != null || addingFood != null -> FoodEditorScreen(
                         initial = editingFood ?: addingFood!!,
                         subscriptionState = uiState.subscription,
                         onOpenPlus = {
@@ -389,6 +444,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                         },
                         onSave = {
                             viewModel.saveFood(it)
+                            showSavedMessage(it.name)
                             editingFood = null
                             addingFood = null
                             screen = Screen.TODAY
@@ -403,8 +459,8 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                             addingFood = null
                             screen = Screen.SCAN
                         }
-                    )
-                    screen == Screen.TODAY -> TodayScreen(
+                        )
+                        screen == Screen.TODAY -> TodayScreen(
                         uiState = uiState,
                         onAddFood = { addFoodIfAllowed(viewModel.presetFood(FoodCategory.OTHER)) },
                         onAddLeftovers = { addFoodIfAllowed(viewModel.presetFood(FoodCategory.LEFTOVERS)) },
@@ -418,11 +474,11 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                             screen = Screen.SCAN
                         },
                         onEdit = { editingFood = it },
-                        onFinish = { viewModel.markFinished(it) },
-                        onMarkLeftoverUsed = { viewModel.markFinished(it, addToRestock = false) },
+                        onFinish = { finishFoodWithUndo(it) },
+                        onMarkLeftoverUsed = { finishFoodWithUndo(it, addToRestock = false) },
                         onUseFirst = { useItFirstFood = it }
-                    )
-                    screen in storageScreens -> FoodListScreen(
+                        )
+                        screen in storageScreens -> FoodListScreen(
                         location = screen.toLocation(),
                         uiState = uiState,
                         onLocationSelected = { location ->
@@ -431,11 +487,11 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                             }
                         },
                         onOpenPlus = { screen = Screen.PLUS },
-                        onFinish = { viewModel.markFinished(it) },
+                        onFinish = { finishFoodWithUndo(it) },
                         onDelete = viewModel::deleteFood,
                         onUseFirst = { useItFirstFood = it }
-                    ) { editingFood = it }
-                    screen == Screen.RECIPES -> RecipeIdeasScreen(
+                        ) { editingFood = it }
+                        screen == Screen.RECIPES -> RecipeIdeasScreen(
                         uiState = uiState,
                         onOpenPlus = { screen = Screen.PLUS },
                         onUseItFirst = { useItFirstFood = it },
@@ -443,7 +499,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                         onMarkIngredientsUsed = { idea ->
                             uiState.activeFoods
                                 .filter { it.id in idea.usedFoodIds }
-                                .forEach { viewModel.markFinished(it, addToRestock = false) }
+                                .forEach { finishFoodWithUndo(it, addToRestock = false) }
                         },
                         onAddMissingToRestock = { idea ->
                             val mergeResult = missingItemsNotAlreadyInShop(
@@ -471,8 +527,8 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                             }
                             screen = Screen.RESTOCK
                         }
-                    )
-                    screen == Screen.RESTOCK -> RestockScreen(
+                        )
+                        screen == Screen.RESTOCK -> RestockScreen(
                         uiState = uiState,
                         message = shopMessage,
                         onMessageDismissed = { shopMessage = null },
@@ -483,8 +539,8 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                         },
                         onToggle = viewModel::toggleRestock,
                         onDelete = viewModel::deleteRestock
-                    )
-                    screen == Screen.SETTINGS -> SettingsScreen(
+                        )
+                        screen == Screen.SETTINGS -> SettingsScreen(
                         subscriptionState = uiState.subscription,
                         recipeFeedback = uiState.recipeFeedback,
                         hiddenRecipeTitles = uiState.hiddenRecipeTitles,
@@ -502,6 +558,7 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                             coroutineScope.launch { ThemePreferences.setAppearanceMode(context, mode) }
                         },
                         onOpenPlus = { screen = Screen.PLUS },
+                        onUnlockBetaPremium = viewModel::activateBetaPremium,
                         onRestorePurchases = viewModel::restorePlusPurchases,
                         onAddSamples = viewModel::addSampleData,
                         onResetRecipeFeedback = viewModel::clearRecipeFeedback,
@@ -514,13 +571,14 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                                 }
                                 .forEach(viewModel::deleteRecipeFeedback)
                         }
-                    )
-                    screen == Screen.PLUS -> FridgeFinishPlusScreen(
+                        )
+                        screen == Screen.PLUS -> FridgeFinishPlusScreen(
                         subscriptionState = uiState.subscription,
+                        onUnlockBetaPremium = viewModel::activateBetaPremium,
                         onStartPurchase = viewModel::startPlusPurchase,
                         onBack = { screen = Screen.SETTINGS }
-                    )
-                    screen == Screen.SCAN -> BarcodeScannerScreen(
+                        )
+                        screen == Screen.SCAN -> BarcodeScannerScreen(
                         lookupState = barcodeLookup,
                         onBarcodeScanned = viewModel::lookupBarcode,
                         onUseProduct = { product ->
@@ -548,8 +606,8 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                             viewModel.clearBarcodeLookup()
                             screen = Screen.TODAY
                         }
-                    )
-                    screen == Screen.RECEIPT_SCAN -> ReceiptImportScreen(
+                        )
+                        screen == Screen.RECEIPT_SCAN -> ReceiptImportScreen(
                         onImport = { candidates ->
                             candidates.forEach { candidate ->
                                 viewModel.saveFood(
@@ -570,7 +628,9 @@ fun FridgeFinishApp(viewModel: FridgeFinishViewModel = viewModel()) {
                             screen = Screen.FRIDGE
                         },
                         onCancel = { screen = Screen.SCAN }
-                    )
+                        )
+                    }
+                    }
                 }
             }
         }
@@ -777,7 +837,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.section(
         }
     }
     items(foodItems, key = { "$title-${it.id}" }) { item ->
-        FoodCard(item, uiState.statusOf(item), onEdit, onFinish, onUseFirst, onDelete = null)
+        FoodCard(item, uiState.statusOf(item), onEdit, onFinish, onUseFirst, onDelete = null, modifier = Modifier.animateItem())
     }
 }
 
@@ -789,7 +849,9 @@ private fun SectionHeader(title: String, count: Int) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(title, style = MaterialTheme.typography.titleMedium)
-        Text("$count", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        AnimatedContent(targetState = count, label = "section-count") { animatedCount ->
+            Text("$animatedCount", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        }
     }
 }
 
@@ -808,10 +870,13 @@ private fun EmptySectionCard(title: String) {
 
 @Composable
 private fun CountCard(label: String, count: Int, status: FreshnessStatus, modifier: Modifier = Modifier) {
-    val countColor = statusContentColor(status)
-    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = statusContainerColor(status))) {
+    val countColor by animateColorAsState(statusContentColor(status), animationSpec = tween(FridgeFinishMotion.Standard), label = "count-color")
+    val containerColor by animateColorAsState(statusContainerColor(status), animationSpec = tween(FridgeFinishMotion.Standard), label = "count-container")
+    Card(modifier = modifier.animateContentSize(), colors = CardDefaults.cardColors(containerColor = containerColor)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(count.toString(), style = MaterialTheme.typography.headlineMedium, color = countColor)
+            AnimatedContent(targetState = count, label = "dashboard-count") { animatedCount ->
+                Text(animatedCount.toString(), style = MaterialTheme.typography.headlineMedium, color = countColor)
+            }
             Text(label, style = MaterialTheme.typography.labelMedium, color = countColor)
         }
     }
@@ -901,13 +966,17 @@ private fun FoodListScreen(
                 SimpleMenu("Status", status, listOf("All") + FreshnessStatus.entries.map { it.label }) { status = it }
             }
         }
-        if (foods.isEmpty()) {
-            item {
+        item {
+            AnimatedVisibility(
+                visible = foods.isEmpty(),
+                enter = FridgeFinishMotion.fadeInStandard() + expandVertically(animationSpec = tween(FridgeFinishMotion.Standard)),
+                exit = FridgeFinishMotion.fadeOutQuick() + shrinkVertically(animationSpec = tween(FridgeFinishMotion.Quick))
+            ) {
                 EmptyStorageCard(location, uiState.subscription)
             }
         }
         items(foods, key = { it.id }) { item ->
-            FoodCard(item, uiState.statusOf(item), onEdit, onFinish, onUseFirst, onDelete)
+            FoodCard(item, uiState.statusOf(item), onEdit, onFinish, onUseFirst, onDelete, modifier = Modifier.animateItem())
         }
     }
 }
@@ -939,7 +1008,7 @@ private fun StorageAccessRow(subscriptionState: FridgeFinishSubscriptionState) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            if (subscriptionState.hasAdminAccess) "Admin Plus active" else "Plus active",
+            subscriptionState.premiumAccessLabel,
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary
         )
@@ -979,9 +1048,16 @@ private fun FoodCard(
     onEdit: (FoodItemEntity) -> Unit,
     onFinish: (FoodItemEntity) -> Unit,
     onUseFirst: (FoodItemEntity) -> Unit,
-    onDelete: ((FoodItemEntity) -> Unit)?
+    onDelete: ((FoodItemEntity) -> Unit)?,
+    modifier: Modifier = Modifier
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    var finishing by remember(item.id) { mutableStateOf(false) }
+    val finishCheckScale by animateFloatAsState(
+        targetValue = if (finishing) 1.18f else 1f,
+        animationSpec = tween(FridgeFinishMotion.Quick),
+        label = "finish-check-scale"
+    )
+    Card(modifier = modifier.fillMaxWidth().animateContentSize(animationSpec = tween(FridgeFinishMotion.Standard))) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.Top) {
                 item.imageUri?.takeIf { it.isNotBlank() }?.let { imageUri ->
@@ -1003,7 +1079,11 @@ private fun FoodCard(
                 }
                 StatusChip(status)
             }
-            if (item.itemState != FoodItemState.FRESH || item.location == FoodLocation.FREEZER) {
+            AnimatedVisibility(
+                visible = item.itemState != FoodItemState.FRESH || item.location == FoodLocation.FREEZER,
+                enter = FridgeFinishMotion.fadeInStandard() + expandVertically(animationSpec = tween(FridgeFinishMotion.Standard)),
+                exit = FridgeFinishMotion.fadeOutQuick() + shrinkVertically(animationSpec = tween(FridgeFinishMotion.Quick))
+            ) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     AssistChip(onClick = {}, label = { Text(item.effectiveItemState().label) })
                     if (item.itemState == FoodItemState.SPOILED) {
@@ -1028,8 +1108,16 @@ private fun FoodCard(
                         Text("Use first")
                     }
                 }
-                OutlinedButton(onClick = { onFinish(item) }, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                OutlinedButton(
+                    onClick = {
+                        if (!finishing) {
+                            finishing = true
+                            onFinish(item)
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size((18 * finishCheckScale).dp))
                     Text("Finished")
                 }
                 OutlinedButton(onClick = { onEdit(item) }, modifier = Modifier.weight(1f)) {
@@ -1203,6 +1291,12 @@ private fun UseItFirstScreen(
             }
         }
         items(visibleIdeas, key = { "use-first-${item.id}-${it.title}" }) { idea ->
+            AnimatedVisibility(
+                visible = true,
+                enter = FridgeFinishMotion.listItemEnter(),
+                exit = FridgeFinishMotion.listItemExit(),
+                modifier = Modifier.animateItem()
+            ) {
             RecipeIdeaCard(
                 idea = idea,
                 isSaved = idea.title in savedTitles,
@@ -1233,6 +1327,7 @@ private fun UseItFirstScreen(
                 },
                 onMoreInfo = { selectedRecipe = idea }
             )
+            }
         }
     }
 }
@@ -1382,6 +1477,12 @@ private fun RecipeIdeasScreen(
             }
         }
         items(ideas, key = { "recipe-${it.title}" }) { idea ->
+            AnimatedVisibility(
+                visible = true,
+                enter = FridgeFinishMotion.listItemEnter(),
+                exit = FridgeFinishMotion.listItemExit(),
+                modifier = Modifier.animateItem()
+            ) {
             RecipeIdeaCard(
                 idea = idea,
                 isSaved = idea.title in savedTitles,
@@ -1417,6 +1518,7 @@ private fun RecipeIdeasScreen(
                 },
                 onMoreInfo = { selectedRecipe = idea }
             )
+            }
         }
     }
 }
@@ -1852,7 +1954,7 @@ private fun RecipeIdeaCard(
     onHideMissingIngredient: (String) -> Unit,
     onMoreInfo: () -> Unit
 ) {
-    Card(Modifier.fillMaxWidth()) {
+    Card(Modifier.fillMaxWidth().animateContentSize(animationSpec = tween(FridgeFinishMotion.Standard))) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Column(Modifier.weight(1f)) {
@@ -2611,12 +2713,18 @@ private fun String.hasAny(vararg terms: String): Boolean =
 
 @Composable
 private fun StatusChip(status: FreshnessStatus) {
+    val containerColor by animateColorAsState(statusContainerColor(status), animationSpec = tween(FridgeFinishMotion.Standard), label = "status-chip-container")
+    val labelColor by animateColorAsState(statusContentColor(status), animationSpec = tween(FridgeFinishMotion.Standard), label = "status-chip-label")
     AssistChip(
         onClick = {},
-        label = { Text(status.label) },
+        label = {
+            AnimatedContent(targetState = status.label, label = "status-chip-label") { label ->
+                Text(label)
+            }
+        },
         colors = androidx.compose.material3.AssistChipDefaults.assistChipColors(
-            containerColor = statusContainerColor(status),
-            labelColor = statusContentColor(status)
+            containerColor = containerColor,
+            labelColor = labelColor
         )
     )
 }
@@ -2665,6 +2773,7 @@ private fun FoodEditorScreen(
     var barcode by rememberSaveable(initial.id) { mutableStateOf(initial.barcode.orEmpty()) }
     var itemState by rememberSaveable(initial.id) { mutableStateOf(initial.effectiveItemState()) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
+    var isSaving by rememberSaveable(initial.id) { mutableStateOf(false) }
     var showDetails by rememberSaveable(initial.id) {
         mutableStateOf(
             quantity.isNotBlank() ||
@@ -2693,10 +2802,20 @@ private fun FoodEditorScreen(
     ) {
         item {
             AddFoodHeroCard(subscriptionState)
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            AnimatedVisibility(
+                visible = error != null,
+                enter = FridgeFinishMotion.fadeInStandard() + expandVertically(animationSpec = tween(FridgeFinishMotion.Standard)),
+                exit = FridgeFinishMotion.fadeOutQuick() + shrinkVertically(animationSpec = tween(FridgeFinishMotion.Quick))
+            ) {
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
         }
-        if (hasScannedProduct) {
-            item {
+        item {
+            AnimatedVisibility(
+                visible = hasScannedProduct,
+                enter = FridgeFinishMotion.popIn(),
+                exit = FridgeFinishMotion.popOut()
+            ) {
                 ScannedProductReviewCard(
                     name = name,
                     imageUri = imageUri,
@@ -2710,13 +2829,19 @@ private fun FoodEditorScreen(
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        imageUri.takeIf { it.isNotBlank() }?.let {
-                            AsyncImage(
-                                model = it,
-                                contentDescription = "Product image preview",
-                                modifier = Modifier.size(72.dp),
-                                contentScale = ContentScale.Crop
-                            )
+                        AnimatedVisibility(
+                            visible = imageUri.isNotBlank(),
+                            enter = FridgeFinishMotion.popIn(),
+                            exit = FridgeFinishMotion.popOut()
+                        ) {
+                            imageUri.takeIf { it.isNotBlank() }?.let {
+                                AsyncImage(
+                                    model = it,
+                                    contentDescription = "Product image preview",
+                                    modifier = Modifier.size(72.dp).clip(RoundedCornerShape(12.dp)),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
                         }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(name, { name = it }, label = { Text("Food name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
@@ -2780,11 +2905,17 @@ private fun FoodEditorScreen(
         }
         item {
             OutlinedButton(onClick = { showDetails = !showDetails }, modifier = Modifier.fillMaxWidth()) {
+                val rotation by animateFloatAsState(if (showDetails) 180f else 0f, animationSpec = tween(FridgeFinishMotion.Standard), label = "details-rotation")
                 Text(if (showDetails) "Hide details" else "More details")
+                Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.rotate(rotation))
             }
         }
-        if (showDetails) {
-            item {
+        item {
+            AnimatedVisibility(
+                visible = showDetails,
+                enter = FridgeFinishMotion.fadeInStandard() + expandVertically(animationSpec = tween(FridgeFinishMotion.Standard)),
+                exit = FridgeFinishMotion.fadeOutQuick() + shrinkVertically(animationSpec = tween(FridgeFinishMotion.Quick))
+            ) {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Details", style = MaterialTheme.typography.titleMedium)
@@ -2821,11 +2952,13 @@ private fun FoodEditorScreen(
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
+                    if (isSaving) return@Button
                     val parsedExpiration = parseDate(expirationDate)
                     if (name.isBlank() || parsedExpiration == null) {
                         error = "Add a food name and a valid expiration date."
                         return@Button
                     }
+                    isSaving = true
                     onSave(
                         initial.copy(
                             name = name.trim(),
@@ -2849,8 +2982,12 @@ private fun FoodEditorScreen(
                             itemState = itemState
                         )
                     )
-                }, modifier = Modifier.weight(1f)) { Text("Save food") }
-                OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text("Cancel") }
+                }, modifier = Modifier.weight(1f), enabled = !isSaving) {
+                    AnimatedContent(targetState = isSaving, label = "save-food-label") { saving ->
+                        Text(if (saving) "Saving..." else "Save food")
+                    }
+                }
+                OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f), enabled = !isSaving) { Text("Cancel") }
             }
         }
     }
@@ -3004,15 +3141,21 @@ private fun RestockScreen(
         }
         item {
             SectionHeader("Need to buy", openItems.size)
-            if (openItems.isEmpty()) EmptySectionCard("Restock")
+            AnimatedVisibility(
+                visible = openItems.isEmpty(),
+                enter = FridgeFinishMotion.fadeInStandard() + expandVertically(animationSpec = tween(FridgeFinishMotion.Standard)),
+                exit = FridgeFinishMotion.fadeOutQuick() + shrinkVertically(animationSpec = tween(FridgeFinishMotion.Quick))
+            ) {
+                EmptySectionCard("Restock")
+            }
         }
         items(openItems, key = { "open-${it.id}" }) { item ->
-            RestockCard(item, onToggle, onDelete)
+            RestockCard(item, onToggle, onDelete, modifier = Modifier.animateItem())
         }
         if (purchasedItems.isNotEmpty()) {
             item { SectionHeader("Purchased", purchasedItems.size) }
             items(purchasedItems, key = { "done-${it.id}" }) { item ->
-                RestockCard(item, onToggle, onDelete)
+                RestockCard(item, onToggle, onDelete, modifier = Modifier.animateItem())
             }
         }
     }
@@ -3074,9 +3217,15 @@ private fun ShopHeroCard(openCount: Int, purchasedCount: Int) {
 private fun RestockCard(
     item: RestockItemEntity,
     onToggle: (RestockItemEntity) -> Unit,
-    onDelete: (RestockItemEntity) -> Unit
+    onDelete: (RestockItemEntity) -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    Card(Modifier.fillMaxWidth()) {
+    val containerColor by animateColorAsState(
+        if (item.isPurchased) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface,
+        animationSpec = tween(FridgeFinishMotion.Standard),
+        label = "restock-container"
+    )
+    Card(modifier.fillMaxWidth().animateContentSize(), colors = CardDefaults.cardColors(containerColor = containerColor)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = item.isPurchased, onCheckedChange = { onToggle(item) })
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -3111,6 +3260,7 @@ private fun SettingsScreen(
     onClearThemePreview: () -> Unit,
     onAppearanceModeSelected: (AppearanceMode) -> Unit,
     onOpenPlus: () -> Unit,
+    onUnlockBetaPremium: () -> Unit,
     onRestorePurchases: () -> Unit,
     onAddSamples: () -> Unit,
     onResetRecipeFeedback: () -> Unit,
@@ -3129,7 +3279,7 @@ private fun SettingsScreen(
     }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item {
-            SettingsHeroCard(subscriptionState)
+            SettingsHeroCard(subscriptionState, onUnlockBetaPremium)
         }
         item {
             AppearanceSettingsCard(
@@ -3157,9 +3307,7 @@ private fun SettingsScreen(
                     }
                     PlusStatusChip(subscriptionState)
                 }
-                if (subscriptionState.hasAdminAccess) {
-                    Text("Admin build access is on. Plus features are unlocked for testing.")
-                }
+                BetaPremiumAccessCard(subscriptionState, onUnlockBetaPremium)
                 if (!subscriptionState.isPlus && subscriptionState.freeSlotsRemaining == 0) {
                     Text("You reached the free item limit. Plus unlocks unlimited items.")
                 }
@@ -3501,7 +3649,7 @@ private fun MiniThemePreview(
 }
 
 @Composable
-private fun SettingsHeroCard(subscriptionState: FridgeFinishSubscriptionState) {
+private fun SettingsHeroCard(subscriptionState: FridgeFinishSubscriptionState, onUnlockBetaPremium: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
@@ -3524,10 +3672,24 @@ private fun SettingsHeroCard(subscriptionState: FridgeFinishSubscriptionState) {
                 if (subscriptionState.isPlus) {
                     "Premium tools are unlocked for storage, recipes, and smart shopping."
                 } else {
-                    "Basic fridge tracking is free. Plus unlocks deeper organization."
+                    "Beta testers can unlock Premium on this device before billing is connected."
                 },
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
+            if (!subscriptionState.isPlus) {
+                Button(
+                    onClick = onUnlockBetaPremium,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                ) {
+                    Icon(Icons.Default.Star, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Unlock beta Premium")
+                }
+            }
         }
     }
 }
@@ -3571,12 +3733,16 @@ private fun UpgradePromptDialog(
 @Composable
 private fun FridgeFinishPlusScreen(
     subscriptionState: FridgeFinishSubscriptionState,
+    onUnlockBetaPremium: () -> Unit,
     onStartPurchase: () -> Unit,
     onBack: () -> Unit
 ) {
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             PlusHeroCard(subscriptionState)
+        }
+        item {
+            BetaPremiumAccessCard(subscriptionState, onUnlockBetaPremium)
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
@@ -3594,10 +3760,10 @@ private fun FridgeFinishPlusScreen(
         item {
             SettingsCard("Billing status") {
                 Text(
-                    if (subscriptionState.hasAdminAccess) {
-                        "Admin build access is on. Plus features are unlocked for testing. Google Play Billing is still not connected for public purchases."
+                    if (subscriptionState.isPlus) {
+                        "${subscriptionState.premiumAccessLabel}. Premium features are available on this device. Google Play Billing is still not connected for public purchases."
                     } else {
-                        "Google Play Billing is not connected in this build. The app will not start a real purchase or fake an upgrade until billing is implemented."
+                        "Google Play Billing is not connected in this build. Beta testers can unlock Premium locally with the button above."
                     }
                 )
                 subscriptionState.billingMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
@@ -3628,7 +3794,7 @@ private fun PlusHeroCard(subscriptionState: FridgeFinishSubscriptionState) {
                 Icon(Icons.Default.Star, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
             }
             Text(
-                if (subscriptionState.isPlus) "Plus is active" else "Upgrade from tracking to finishing",
+                if (subscriptionState.isPlus) subscriptionState.premiumAccessLabel else "Upgrade from tracking to finishing",
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
@@ -3653,9 +3819,85 @@ private fun PlusFeatureTile(title: String, body: String, modifier: Modifier = Mo
 private val FridgeFinishSubscriptionState.planLabel: String
     get() = when {
         hasAdminAccess -> "Admin Plus"
+        hasBetaTesterAccess -> "Beta Plus"
         isPlus -> "Plus"
         else -> "Free"
     }
+
+private val FridgeFinishSubscriptionState.premiumAccessLabel: String
+    get() = when {
+        hasAdminAccess -> "Admin Plus active"
+        hasBetaTesterAccess -> "Beta Premium active"
+        isPlus -> "Plus active"
+        else -> "Premium locked"
+    }
+
+@Composable
+private fun BetaPremiumAccessCard(
+    subscriptionState: FridgeFinishSubscriptionState,
+    onUnlockBetaPremium: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (subscriptionState.isPlus) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                FridgeFinishColors.current.success
+            }
+        )
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (subscriptionState.isPlus) "Premium access is active" else "Beta tester Premium access",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = if (subscriptionState.isPlus) MaterialTheme.colorScheme.onPrimaryContainer else FridgeFinishColors.current.onSuccess
+                    )
+                    Text(
+                        if (subscriptionState.isPlus) {
+                            "Storage locations, recipes, smart shopping, and style packs are unlocked on this device."
+                        } else {
+                            "Testing Fridge Finish? Tap once to unlock Plus features locally. No payment or account needed."
+                        },
+                        color = if (subscriptionState.isPlus) MaterialTheme.colorScheme.onPrimaryContainer else FridgeFinishColors.current.onSuccess
+                    )
+                }
+                Icon(
+                    Icons.Default.Star,
+                    contentDescription = null,
+                    tint = if (subscriptionState.isPlus) MaterialTheme.colorScheme.onPrimaryContainer else FridgeFinishColors.current.onSuccess,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+            if (!subscriptionState.hasBetaTesterAccess) {
+                Button(
+                    onClick = onUnlockBetaPremium,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                ) {
+                    Icon(Icons.Default.Star, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text(if (subscriptionState.isPlus) "Save beta Premium access" else "Unlock beta Premium")
+                }
+            } else {
+                AssistChip(
+                    onClick = {},
+                    leadingIcon = { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    label = { Text("Beta Premium saved on this device") }
+                )
+            }
+        }
+    }
+}
 
 @Composable
 private fun PlanCard(title: String, benefits: List<String>, highlighted: Boolean) {
@@ -3790,12 +4032,18 @@ private fun ReceiptImportScreen(
                     Button(onClick = { photoPicker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
                         Text("Pick receipt photo")
                     }
-                    importMessage?.let {
+                    AnimatedVisibility(
+                        visible = importMessage != null,
+                        enter = FridgeFinishMotion.fadeInStandard() + expandVertically(animationSpec = tween(FridgeFinishMotion.Standard)),
+                        exit = FridgeFinishMotion.fadeOutQuick() + shrinkVertically(animationSpec = tween(FridgeFinishMotion.Quick))
+                    ) {
+                        importMessage?.let {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                         ) {
                             Text(it, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+                        }
                         }
                     }
                     if (hasPermission) {
@@ -3840,7 +4088,11 @@ private fun ReceiptImportScreen(
 
         item {
             SectionHeader("Review items", candidates.size)
-            if (candidates.isEmpty()) {
+            AnimatedVisibility(
+                visible = candidates.isEmpty(),
+                enter = FridgeFinishMotion.fadeInStandard() + expandVertically(animationSpec = tween(FridgeFinishMotion.Standard)),
+                exit = FridgeFinishMotion.fadeOutQuick() + shrinkVertically(animationSpec = tween(FridgeFinishMotion.Quick))
+            ) {
                 EmptyRecipeCard("No receipt items detected yet. Move closer, improve lighting, or try a flatter receipt.")
             }
         }
@@ -3851,7 +4103,8 @@ private fun ReceiptImportScreen(
                 selected = candidate.name in selectedNames,
                 onSelectedChange = { selected ->
                     selectedNames = if (selected) selectedNames + candidate.name else selectedNames - candidate.name
-                }
+                },
+                modifier = Modifier.animateItem()
             )
         }
 
@@ -3881,9 +4134,10 @@ private fun ReceiptImportScreen(
 private fun ReceiptCandidateCard(
     candidate: ReceiptImportCandidate,
     selected: Boolean,
-    onSelectedChange: (Boolean) -> Unit
+    onSelectedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    Card(Modifier.fillMaxWidth()) {
+    Card(modifier.fillMaxWidth().animateContentSize()) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = selected, onCheckedChange = onSelectedChange)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {

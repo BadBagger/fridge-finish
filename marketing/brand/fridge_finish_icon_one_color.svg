@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Fridge Finish icon</title>
+  <rect x="64" y="48" width="384" height="416" rx="108" fill="#111111"/>
+  <rect x="93" y="77" width="326" height="358" rx="88" fill="#111111"/>
+  <rect x="150" y="112" width="190" height="285" rx="38" fill="#FFFFFF"/>
+  <rect x="174" y="151" width="135" height="103" rx="18" fill="#E8F2E5"/>
+  <rect x="174" y="276" width="135" height="82" rx="18" fill="#E8F2E5"/>
+  <rect x="326" y="172" width="24" height="122" rx="12" fill="#C7D7CE"/>
+  <path d="M214 330c-43-7-70-34-80-76 46 2 78 25 93 67z" fill="#111111"/>
+  <path d="M245 346c15-64 58-104 126-112-5 70-47 112-126 112z" fill="#111111"/>
+  <circle cx="337" cy="342" r="72" fill="#FFFFFF"/>
+  <path d="M301 343l27 28 56-67" fill="none" stroke="#111111" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

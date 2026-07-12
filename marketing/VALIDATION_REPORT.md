@@ -1,0 +1,75 @@
+# Marketing Asset Validation Report
+
+- [PASS] marketing/README.md: exists
+- [PASS] marketing/asset_manifest.json: exists
+- [PASS] marketing/brand/brand_guide.md: exists
+- [PASS] marketing/brand/color_palette.ase-equivalent.txt: exists
+- [PASS] marketing/brand/color_palette.json: exists
+- [PASS] marketing/brand/fridge_finish_icon_master.svg: exists
+- [PASS] marketing/brand/fridge_finish_icon_one_color.png: 1024x1024 alpha
+- [PASS] marketing/brand/fridge_finish_icon_one_color.svg: exists
+- [PASS] marketing/brand/fridge_finish_icon_transparent.png: 1024x1024 alpha
+- [PASS] marketing/brand/fridge_finish_logo_dark.svg: exists
+- [PASS] marketing/brand/fridge_finish_logo_light.svg: exists
+- [PASS] marketing/brand/fridge_finish_logo_stacked.png: 900x900 alpha
+- [PASS] marketing/brand/fridge_finish_logo_stacked.svg: exists
+- [PASS] marketing/brand/fridge_finish_wordmark_horizontal.png: 1200x320 alpha
+- [PASS] marketing/brand/fridge_finish_wordmark_horizontal.svg: exists
+- [PASS] marketing/brand/smithware_studios_lockup.svg: exists
+- [PASS] marketing/copy/google_play_listing.md: exists
+- [PASS] marketing/copy/google_play_listing.txt: exists
+- [PASS] marketing/copy/press_kit.md: exists
+- [PASS] marketing/copy/screenshot_copy.csv: exists
+- [PASS] marketing/copy/social_copy.md: exists
+- [PASS] marketing/copy/store_metadata.json: exists
+- [PASS] marketing/play-store/asset_manifest.json: exists
+- [PASS] marketing/play-store/feature-graphic/fridge_finish_feature_graphic_1024x500.png: 1024x500 opaque
+- [PASS] marketing/play-store/feature-graphic/fridge_finish_feature_graphic_no_text_1024x500.png: 1024x500 opaque
+- [PASS] marketing/play-store/icon/fridge_finish_play_icon_512.png: 512x512 alpha
+- [PASS] marketing/play-store/play_console_checklist.md: exists
+- [PASS] marketing/play-store/screenshots/alt_text.csv: exists
+- [PASS] marketing/play-store/screenshots/phone/01_know_what_to_use_next.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/phone/02_expiring_food_priority.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/phone/03_add_food_quickly.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/phone/04_fridge_freezer_pantry.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/phone/05_reminders_before_expiry.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/phone/06_leftovers_and_food_tracking.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/phone/07_progress_or_insights.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/phone/08_simple_private_organized.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/raw/01_know_what_to_use_next.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/raw/02_expiring_food_priority.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/raw/03_add_food_quickly.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/raw/04_fridge_freezer_pantry.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/raw/05_reminders_before_expiry.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/raw/06_leftovers_and_food_tracking.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/raw/07_progress_or_insights.png: 1080x1920 opaque
+- [PASS] marketing/play-store/screenshots/raw/08_simple_private_organized.png: 1080x1920 opaque
+- [PASS] marketing/play-store/upload_order.md: exists
+- [PASS] marketing/social/fridge_finish_app_suite_tile_1200x1200.png: 1200x1200 opaque
+- [PASS] marketing/social/fridge_finish_beta_announcement_1080x1080.png: 1080x1080 opaque
+- [PASS] marketing/social/fridge_finish_feature_card_expiry_1080x1080.png: 1080x1080 opaque
+- [PASS] marketing/social/fridge_finish_feature_card_inventory_1080x1080.png: 1080x1080 opaque
+- [PASS] marketing/social/fridge_finish_feature_card_leftovers_1080x1080.png: 1080x1080 opaque
+- [PASS] marketing/social/fridge_finish_launch_square_1080x1080.png: 1080x1080 opaque
+- [PASS] marketing/social/fridge_finish_portrait_post_1080x1350.png: 1080x1350 opaque
+- [PASS] marketing/social/fridge_finish_social_preview_1200x628.png: 1200x628 opaque
+- [PASS] marketing/social/fridge_finish_story_1080x1920.png: 1080x1920 opaque
+- [PASS] marketing/social/fridge_finish_web_hero_1600x900.png: 1600x900 opaque
+- [PASS] marketing/web/fridge_finish_app_badge.svg: exists
+- [PASS] marketing/web/fridge_finish_card_1200x675.png: 1200x675 opaque
+- [PASS] marketing/web/fridge_finish_favicon.svg: exists
+- [PASS] marketing/web/fridge_finish_favicon_32.png: 32x32 alpha
+- [PASS] marketing/web/fridge_finish_favicon_48.png: 48x48 alpha
+- [PASS] marketing/web/fridge_finish_hero_1600x900.png: 1600x900 opaque
+- [PASS] marketing/web/fridge_finish_icon_256.png: 256x256 alpha
+- [PASS] marketing/web/fridge_finish_icon_512.png: 512x512 alpha
+- [PASS] marketing/web/fridge_finish_logo_horizontal.png: 1200x320 alpha
+- [PASS] marketing/web/fridge_finish_logo_horizontal.svg: exists
+- [PASS] marketing/web/fridge_finish_open_graph_1200x630.png: 1200x630 opaque
+- [PASS] marketing/web/fridge_finish_thumbnail_800x450.png: 800x450 opaque
+- [PASS] play icon under 1 MB: 5482 bytes
+- [PASS] alt text covers every screenshot: missing=[]
+- [PASS] alt text <= 140 chars: too_long=[]
+- [PASS] duplicate PNG hashes detected: 7 duplicate groups; expected for reused logo exports
+
+Overall: PASS

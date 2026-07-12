@@ -12,6 +12,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.fridgefinish.app.R
 import com.fridgefinish.app.data.FoodItemEntity
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -84,7 +85,7 @@ fun Context.showFoodReminder(foodId: Long, foodName: String) {
     if (!scheduler.notificationsAllowed()) return
     scheduler.createChannel()
     val notification = NotificationCompat.Builder(this, FoodNotificationScheduler.CHANNEL_ID)
-        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setSmallIcon(R.drawable.ic_notification_fridge_finish)
         .setContentTitle("Eat soon")
         .setContentText("$foodName is coming up. Check before eating and use your judgment.")
         .setPriority(NotificationCompat.PRIORITY_DEFAULT)

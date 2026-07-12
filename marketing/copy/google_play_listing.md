@@ -1,0 +1,28 @@
+# Fridge Finish
+
+Short description (64 chars):
+
+Track food dates so groceries get used before they become waste.
+
+## Long description
+
+Food gets forgotten surprisingly quickly. Fridge Finish helps you keep track of what you already have, what should be used next, and what may expire soon.
+
+Use Fridge Finish to organize groceries, leftovers, refrigerator items, freezer items, pantry items, and shopping/restock needs. The app highlights food by urgency so you can decide what to eat first, what expires today, what is coming up, and what should be restocked.
+
+Features verified in the app:
+- Today dashboard for urgent food dates
+- Fridge, freezer, pantry, and extra storage locations
+- Add and edit food with expiration dates, quantities, notes, barcode details, and optional photos
+- Local reminders before food dates arrive
+- Leftover tracking and Leftover Rescue suggestions
+- Local recipe suggestions based on owned and expiring ingredients
+- Restock list for groceries to buy again
+- Receipt photo import for reviewing grocery items
+- Light, dark, and optional premium style packs
+
+Fridge Finish is local-first. Your food list is stored on your device and no account is required. Barcode product lookup uses an online product database only when you choose to scan or enter a barcode.
+
+Dates are reminders, not food safety guarantees. Check package guidance and use your judgment before eating.
+
+Fridge Finish is made by Smithware Studios.

@@ -21,9 +21,10 @@ data class FridgeFinishSubscriptionState(
     val tier: SubscriptionTier = SubscriptionTier.Free,
     val activeItemCount: Int = 0,
     val billingMessage: String? = null,
-    val hasAdminAccess: Boolean = false
+    val hasAdminAccess: Boolean = false,
+    val hasBetaTesterAccess: Boolean = false
 ) {
-    val isPlus: Boolean = tier == SubscriptionTier.Plus || hasAdminAccess
+    val isPlus: Boolean = tier == SubscriptionTier.Plus || hasAdminAccess || hasBetaTesterAccess
     val freeSlotsRemaining: Int = (FREE_ITEM_LIMIT - activeItemCount).coerceAtLeast(0)
 
     companion object {
