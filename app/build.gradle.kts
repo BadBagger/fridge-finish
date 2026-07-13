@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,18 +7,48 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use(::load)
+    }
+}
+
+fun signingProperty(name: String): String? = keystoreProperties.getProperty(name)?.takeIf { it.isNotBlank() }
+
+gradle.taskGraph.whenReady {
+    val releaseRequested = allTasks.any { it.name.contains("Release") || it.name.contains("Bundle") }
+    if (releaseRequested) {
+        val required = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+        val missing = required.filter { signingProperty(it) == null }
+        if (missing.isNotEmpty()) {
+            throw GradleException("Release signing requires local keystore.properties with: ${missing.joinToString(", ")}")
+        }
+    }
+}
+
 android {
     namespace = "com.fridgefinish.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.fridgefinish.app"
+        applicationId = "com.smithware.fridgefinish"
         minSdk = 26
         targetSdk = 35
         versionCode = 29
         versionName = "1.28-marketing-beta-pack"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        getByName("debug")
+        create("release") {
+            signingProperty("storeFile")?.let { storeFile = file(it) }
+            storePassword = signingProperty("storePassword")
+            keyAlias = signingProperty("keyAlias")
+            keyPassword = signingProperty("keyPassword")
+        }
     }
 
     buildTypes {
@@ -30,6 +62,7 @@ android {
         }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

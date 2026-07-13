@@ -3,7 +3,13 @@
 build/
 app/build/
 local.properties
+keystore.properties
+signing.properties
 *.iml
+*.jks
+*.keystore
+*password*
+*credential*
 *.apk
 *.aab
 .android-sdk/
